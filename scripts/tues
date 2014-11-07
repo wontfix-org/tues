@@ -11,7 +11,6 @@ Options:
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
 """
-
 import os as _os
 import sys as _sys
 import functools as _ft
@@ -20,7 +19,6 @@ import getpass as _getpass
 
 import docopt as _docopt
 import fabric.api as _fabric
-import requests as _requests
 
 
 _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
