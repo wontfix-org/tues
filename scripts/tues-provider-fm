@@ -9,7 +9,6 @@ Options:
 """
 
 import os as _os
-import functools as _ft
 
 import docopt as _docopt
 import requests as _requests
