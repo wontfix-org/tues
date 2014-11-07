@@ -15,14 +15,19 @@ import requests as _requests
 
 
 def hosts(query, url):
-    hosts = _requests.get(
+    response = _requests.get(
         url,
         params={"search": query, "per_page": 10000},
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-    ).json()
+    )
+
+    if response.status_code != 200:
+        raise Exception("Could not get host list, call returned(%r): %r" % (response.status_code, response.text))
+
+    hosts = response.json()
     return [host['host']['name'] for host in hosts]
 
 
