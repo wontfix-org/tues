@@ -6,7 +6,7 @@ tues [options] <command> <provider> [<args>...]
 Options:
   <provider>                     The Provider used for looking up hosts.
   <command>                      The shell command to execute.
-  --user=<runuser>               The user to run the command as.
+  -u <runuser>, --user=<runuser> The user to run the command as.
   -p, --parallel                 Execute tasks in parallel.
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
