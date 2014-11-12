@@ -10,6 +10,7 @@ Options:
   -p, --parallel                 Execute tasks in parallel.
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
+  -w, --warn-only                Do not abort execution on errors, only issue warnings
 """
 import os as _os
 import sys as _sys
@@ -48,6 +49,9 @@ if __name__ == '__main__':
 
     _fabric.env.parallel = args["--parallel"]
     _fabric.env.pool_size = args["--pool-size"]
+    if ['--warn-only']:
+        _fabric.env.warn_only = True
+
     if args["--parallel"] and args["--user"]:
         _fabric.env.password = _getpass.getpass("Sudo Password:")
 
