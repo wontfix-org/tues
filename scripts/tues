@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 """Usage:
-tues [options] <command> <provider> [<args>...]
+tues <command> [options] <provider> [<args>...]
 
 Options:
   <provider>                     The Provider used for looking up hosts.
