@@ -55,10 +55,13 @@ if __name__ == '__main__':
     if args["--parallel"] and args["--user"]:
         _fabric.env.password = _getpass.getpass("Sudo Password:")
 
+    cmd = ["tues-provider-{}".format(args["<provider>"])] + args["<args>"]
+    if args['<provider>'] == '--help':
+        cmd = ["tues-provider-{}".format(args["<command>"])] + [args["<provider>"]]
+
     try:
-        cmd = ["tues-provider-{}".format(args["<provider>"])] + args["<args>"]
         output = _sp.check_output(cmd)
-        if "--help" in args["<args>"]:
+        if "--help"  == args["<provider>"]:
             print output
             _sys.exit(0)
         hosts = [x for x in output.split("\n") if x and not x.startswith("#")]
