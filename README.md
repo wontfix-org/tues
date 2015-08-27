@@ -47,5 +47,5 @@ New providers may be added by putting a new executable with a name like "tues-pr
 on your PATH. A provider is expected to return a newline seperated list of hosts.
 
 If the provider returns with an error, the output is considered to be an error message and/or
-it help output. If '--help' is passed through to the provider the output is displayed no matter
+it's help output. If '--help' is passed through to the provider the output is displayed no matter
 what exit code is used.
