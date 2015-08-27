@@ -1,0 +1,20 @@
+#!/usr/bin/env python
+# coding: utf-8
+"""Tues provider that provides hosts names as specified on the commandline.
+
+Usage:
+  tues-provider-cl <hosts> ...
+
+Options:
+  <hosts> ...               Host names
+
+Example:
+  tues ls cl host1 host2 host3
+"""
+
+import docopt as _docopt
+
+if __name__ == '__main__':
+    args = _docopt.docopt(__doc__)
+    for host in args["<hosts>"]:
+        print host
