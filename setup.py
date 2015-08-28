@@ -19,6 +19,8 @@ if __name__ == '__main__':
         scripts=_glob.glob('scripts/tues*'),
         include_package_data=True,
         platforms='any',
+        setup_requires=['setuptools-markdown'],
+        long_description_markdown_filename='README.md',
         install_requires=['docopt', 'fabric', 'requests>=2.4'],
         download_url='https://github.com/wontfix-org/tues/tarball/{0}'.format(_tues.__version__),
         classifiers=[
