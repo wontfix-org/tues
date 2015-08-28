@@ -11,7 +11,7 @@ if __name__ == '__main__':
         name='tues',
         version=_tues.__version__,
         url='https://github.com/wontfix-org/tues/',
-        license='Apache Software License',
+        license='MIT',
         author='Michael van Bracht',
         author_email='michael@wontfix.org',
         description='Easy remote command execution',
