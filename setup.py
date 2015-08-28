@@ -25,7 +25,7 @@ if __name__ == '__main__':
         download_url='https://github.com/wontfix-org/tues/tarball/{0}'.format(_tues.__version__),
         classifiers=[
             'Programming Language :: Python',
-            'Development Status :: 4 - Beta',
+            'Programming Language :: Python :: 2.7',
             'Natural Language :: English',
         ],
     )
