@@ -4,12 +4,13 @@ import glob as _glob
 
 import setuptools as _st
 
+import tues as _tues
 
 if __name__ == '__main__':
     _st.setup(
         name='tues',
-        version="0.0.1",
-        url='http://github.com/wontfix-org/tues/',
+        version=_tues.__version__,
+        url='https://github.com/wontfix-org/tues/',
         license='Apache Software License',
         author='Michael van Bracht',
         author_email='michael@wontfix.org',
@@ -19,6 +20,7 @@ if __name__ == '__main__':
         include_package_data=True,
         platforms='any',
         install_requires=['docopt', 'fabric', 'requests>=2.4'],
+        download_url='https://github.com/wontfix-org/tues/tarball/{0}'.format(_tues.__version__),
         classifiers=[
             'Programming Language :: Python',
             'Development Status :: 4 - Beta',
