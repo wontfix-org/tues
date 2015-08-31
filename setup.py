@@ -21,8 +21,7 @@ if __name__ == '__main__':
         platforms='any',
         setup_requires=['setuptools-markdown'],
         long_description_markdown_filename='README.md',
-        install_requires=['docopt', 'fabric', 'requests>=2.4'],
-        download_url='https://github.com/wontfix-org/tues/tarball/{0}'.format(_tues.__version__),
+        install_requires=['docopt', 'Fabric', 'requests>=2.4'],
         classifiers=[
             'Programming Language :: Python',
             'Programming Language :: Python :: 2.7',
