@@ -11,6 +11,7 @@ Options:
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
   -w, --warn-only                Do not abort execution on errors, only issue warnings
+  -v, --verbose                  Produce more informational output
 """
 import os as _os
 import sys as _sys
@@ -21,6 +22,7 @@ import getpass as _getpass
 
 import docopt as _docopt
 import fabric.api as _fabric
+import fabric.state as _fabric_state
 
 
 _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
@@ -76,6 +78,7 @@ if __name__ == '__main__':
         _sys.exit(e.returncode)
 
     if args['<command>']:
+        _fabric_state.output["running"] = args["--verbose"]
         _fabric.execute(
             _ft.partial(
                 run_cmd,
