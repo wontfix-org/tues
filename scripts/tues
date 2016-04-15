@@ -81,7 +81,7 @@ if __name__ == '__main__':
                 run_cmd,
                 cmd=args['<command>'],
                 user=args['--user'],
-                put_files=args["--file"],
+                put_files=[args["--file"]],
             ),
             hosts=hosts,
         )
