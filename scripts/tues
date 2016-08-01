@@ -24,6 +24,7 @@ import docopt as _docopt
 import fabric.api as _fabric
 import fabric.state as _fabric_state
 
+import tues as _tues # pylint: disable=import-self
 
 _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
 _fabric.env.colorize_errors = True
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     args = _docopt.docopt(
         __doc__,
         options_first=True,
-        version="0.0.1",
+        version=_tues.__version__,
     )
 
     _fabric.env.parallel = args["--parallel"]
