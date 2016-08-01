@@ -44,47 +44,48 @@ def run_cmd(cmd, user=None, put_files=None):
 
     _fabric_state.connections[_fabric.env.host_string].get_transport().close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     args = _docopt.docopt(
         __doc__,
         options_first=True,
-        version='0.0.1',
+        version="0.0.1",
     )
 
     _fabric.env.parallel = args["--parallel"]
     _fabric.env.pool_size = args["--pool-size"]
-    if ['--warn-only']:
+    if ["--warn-only"]:
         _fabric.env.warn_only = True
 
     if args["--parallel"] and args["--user"]:
         _fabric.env.password = _getpass.getpass("Sudo Password:")
 
     cmd = ["tues-provider-{}".format(args["<provider>"])] + args["<args>"]
-    if args['<provider>'] == '--help':
+    if args["<provider>"] == "--help":
         cmd = ["tues-provider-{}".format(args["<command>"])] + [args["<provider>"]]
 
     try:
         output = _sp.check_output(cmd)
-        if "--help"  == args["<provider>"]:
+        if args["<provider>"] == "--help":
             print output
             _sys.exit(0)
         hosts = [x for x in output.split("\n") if x and not x.startswith("#")]
     except OSError as e:
         if e.errno != _errno.ENOENT:
             raise
-        _sys.stderr.write('ERROR: Provider {0!r} not found, make sure {1} is on your PATH\n'.format(args['<provider>'], cmd[0]))
+        _sys.stderr.write("ERROR: Provider {0!r} not found, make sure {1} is on your PATH\n".format(args["<provider>"], cmd[0]))
         _sys.exit(1)
     except _sp.CalledProcessError as e:
         print e.output
         _sys.exit(e.returncode)
 
-    if args['<command>']:
+    if args["<command>"]:
         _fabric_state.output["running"] = args["--verbose"]
         _fabric.execute(
             _ft.partial(
                 run_cmd,
-                cmd=args['<command>'],
-                user=args['--user'],
+                cmd=args["<command>"],
+                user=args["--user"],
                 put_files=[args["--file"]] if args["--file"] else None,
             ),
             hosts=hosts,
