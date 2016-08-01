@@ -42,6 +42,7 @@ def run_cmd(cmd, user=None, put_files=None):
     else:
         _fabric.sudo(cmd, user=user)
 
+    _fabric_state.connections[_fabric.env.host_string].get_transport().close()
 
 if __name__ == '__main__':
     args = _docopt.docopt(
