@@ -32,7 +32,10 @@ def hosts(url, query=None):
         raise Exception("Could not get host list, call returned(%r): %r" % (response.status_code, response.text))
 
     hosts = response.json()
-    return [host['host']['name'] for host in hosts]
+    if isinstance(hosts, dict) and "results" in hosts:
+        return [host["name"] for host in hosts["results"]]
+    else:
+        return [host["host"]["name"] for host in hosts]
 
 
 if __name__ == '__main__':
