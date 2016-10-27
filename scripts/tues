@@ -10,6 +10,8 @@ Options:
   -p, --parallel                 Execute tasks in parallel.
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
+                                 The local path to the file is available to the command as
+                                 $TUES_FILE1.
   -t, --no-pty                   Don't allocate pseudo tty.
   -w, --warn-only                Do not abort execution on errors, only issue warnings
   -v, --verbose                  Produce more informational output
@@ -37,14 +39,18 @@ _fabric.env.always_use_pty = True
 
 
 def run_cmd(cmd, user=None, put_files=None):
-    if put_files is not None:
-        for file in put_files:
-            _fabric.put(file)
+    shell_env = {}
 
-    if user is None:
-        _fabric.run(cmd)
-    else:
-        _fabric.sudo(cmd, user=user)
+    if put_files is not None:
+        for pos, file in enumerate(put_files, start=1):
+            _fabric.put(file)
+            shell_env["TUES_FILE{}".format(pos)] = _os.path.basename(file)
+
+    with _fabric.shell_env(**shell_env):
+        if user is None:
+            _fabric.run(cmd)
+        else:
+            _fabric.sudo(cmd, user=user)
 
     _fabric_state.connections[_fabric.env.host_string].get_transport().close()
 
