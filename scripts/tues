@@ -19,6 +19,7 @@ import errno as _errno
 import functools as _ft
 import subprocess as _sp
 import getpass as _getpass
+import logging as _logging
 
 import docopt as _docopt
 import fabric.api as _fabric
@@ -47,6 +48,8 @@ def run_cmd(cmd, user=None, put_files=None):
 
 
 if __name__ == "__main__":
+    _logging.basicConfig()
+
     args = _docopt.docopt(
         __doc__,
         options_first=True,
