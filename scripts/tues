@@ -10,6 +10,7 @@ Options:
   -p, --parallel                 Execute tasks in parallel.
   -n <size>, --pool-size=<size>  The number of concurrent processes when -p is used. [default: 5]
   -f <file>, --file=<file>       Copy <file> to remote server before executing the command.
+  -t, --no-pty                   Don't allocate pseudo tty.
   -w, --warn-only                Do not abort execution on errors, only issue warnings
   -v, --verbose                  Produce more informational output
 """
@@ -32,6 +33,7 @@ _fabric.env.colorize_errors = True
 _fabric.env.remote_interrupt = True
 _fabric.env.disable_known_hosts = True
 _fabric.env.skip_bad_hosts = True
+_fabric.env.always_use_pty = True
 
 
 def run_cmd(cmd, user=None, put_files=None):
@@ -63,6 +65,9 @@ if __name__ == "__main__":
 
     if args["--parallel"] and args["--user"]:
         _fabric.env.password = _getpass.getpass("Sudo Password:")
+
+    if args["--no-pty"]:
+        _fabric.env.always_use_pty = False
 
     cmd = ["tues-provider-{}".format(args["<provider>"])] + args["<args>"]
     if args["<provider>"] == "--help":
