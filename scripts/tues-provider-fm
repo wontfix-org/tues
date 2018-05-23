@@ -29,10 +29,7 @@ def hosts(url, query=None):
         },
     )
 
-    response = get("%s/api/v1/hosts" % (url,))
-
-    if response.status_code == 404:
-        response = get("%s/api/v2/hosts" % (url,))
+    response = get("%s/api/v2/hosts" % (url,), params={"thin": 1})
 
     if response.status_code != 200:
         raise Exception("Could not get host list, call returned(%r): %r" % (response.status_code, response.text))
@@ -40,8 +37,8 @@ def hosts(url, query=None):
     hosts = response.json()
     if isinstance(hosts, dict) and "results" in hosts:
         return [host["name"] for host in hosts["results"]]
-    else:
-        return [host["host"]["name"] for host in hosts]
+
+    return [host["host"]["name"] for host in hosts]
 
 
 if __name__ == '__main__':
