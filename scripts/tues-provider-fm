@@ -16,7 +16,7 @@ import requests as _requests
 
 
 def hosts(url, query=None):
-    params = {"search": query, "per_page": 10000}
+    params = {"per_page": 10000, "thin": 1}
     if query is not None:
         params["search"] = query
 
@@ -29,7 +29,7 @@ def hosts(url, query=None):
         },
     )
 
-    response = get("%s/api/v2/hosts" % (url,), params={"thin": 1})
+    response = get("%s/api/v2/hosts" % (url,))
 
     if response.status_code != 200:
         raise Exception("Could not get host list, call returned(%r): %r" % (response.status_code, response.text))
