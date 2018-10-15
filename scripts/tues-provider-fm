@@ -1,17 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Usage:
-tues-provider-fm [--foreman-url=<url>] [<expression>]
-
-Options:
-  <expression>                   The foreman filter expression.
-  --foreman-url=<url>            URL to your foreman installation.
-"""
 
 import os as _os
 import functools as _ft
 
-import docopt as _docopt
+import click as _click
 import requests as _requests
 
 
@@ -23,16 +16,16 @@ def hosts(url, query=None):
     get = _ft.partial(
         _requests.get,
         params=params,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
 
     response = get("%s/api/v2/hosts" % (url,))
 
     if response.status_code != 200:
-        raise Exception("Could not get host list, call returned(%r): %r" % (response.status_code, response.text))
+        raise Exception(
+            "Could not get host list, call returned(%r): %r"
+            % (response.status_code, response.text)
+        )
 
     hosts = response.json()
     if isinstance(hosts, dict) and "results" in hosts:
@@ -41,14 +34,13 @@ def hosts(url, query=None):
     return [host["host"]["name"] for host in hosts]
 
 
-if __name__ == '__main__':
-    args = _docopt.docopt(__doc__)
-    foreman_url = args["--foreman-url"] or _os.environ.get("FOREMAN_URL")
+@_click.command()
+@_click.option("--foreman-url", type=unicode, envvar="FOREMAN_URL", required=True, help="Your foreman URL")
+@_click.argument("expression")
+def cli(foreman_url, expression):
+    _click.echo("\n".join(hosts(foreman_url, expression)))
 
-    if not foreman_url:
-        raise Exception(
-            "You need to provide a foreman url either by setting FOREMAN_URL or passing --foreman-url"
-        )
 
-    hosts = hosts(foreman_url, args['<expression>'])
-    print "\n".join(hosts)
+if __name__ == "__main__":
+    cli()
+

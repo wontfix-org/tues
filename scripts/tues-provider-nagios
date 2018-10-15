@@ -1,35 +1,28 @@
 #!/usr/bin/env python
 # coding: utf-8
-"""Usage:
-tues-provider-nagios [-a] [--host=<host>] [--socket=<socket>] [<service-expr>] [<host-expr>]
-
-This provider requires the check_mk livestatus plugin
-
-Options:
-  -a                             Also consider services in OK state
-  <service-expr>                 A regluar expression matching the service description
-  <host-expr>                    A regluar expression matching the host name
-  --host=<host>                  The hostname of the nagios server
-  --socket=<socket>              The path to the livestatus socket on the nagios server
-"""
 
 import os as _os
 import subprocess as _sp
 
-import docopt as _docopt
+import click as _click
 
 
 def hosts(host, socket, service_expr=None, host_expr=None, consider_all_states=False):
-    proc = _sp.Popen('ssh {0} "unixcat {1}"'.format(host, socket), shell=True, stdin=_sp.PIPE, stdout=_sp.PIPE)
-    proc.stdin.write('GET services\nColumns: host_name\n')
+    proc = _sp.Popen(
+        'ssh {0} "unixcat {1}"'.format(host, socket),
+        shell=True,
+        stdin=_sp.PIPE,
+        stdout=_sp.PIPE,
+    )
+    proc.stdin.write("GET services\nColumns: host_name\n")
     if not consider_all_states:
-        proc.stdin.write('Filter: state != 0\n')
+        proc.stdin.write("Filter: state != 0\n")
 
     if service_expr is not None:
-        proc.stdin.write('Filter: description ~~ {0}\n'.format(service_expr))
+        proc.stdin.write("Filter: description ~~ {0}\n".format(service_expr))
 
     if host_expr is not None:
-        proc.stdin.write('Filter: host_name ~~ {0}\n'.format(host_expr))
+        proc.stdin.write("Filter: host_name ~~ {0}\n".format(host_expr))
 
     proc.stdin.close()
     try:
@@ -38,20 +31,26 @@ def hosts(host, socket, service_expr=None, host_expr=None, consider_all_states=F
         proc.terminate()
 
 
-if __name__ == '__main__':
-    args = _docopt.docopt(__doc__)
-    nagios_host = args.get('--host') or _os.environ.get('NAGIOS_HOST', 'nagios')
-    livestatus_socket = (
-        args.get('--socket')
-        or _os.environ.get('NAGIOS_LIVESTATUS_SOCKET', '/var/lib/nagios3/rw/livestatus')
-    )
-
-    print '\n'.join(
-        hosts(
-            nagios_host,
-            livestatus_socket,
-            args['<service-expr>'],
-            args['<host-expr>'],
-            args.get('-a', False),
+@_click.command()
+@_click.option("--host", type=unicode, default="nagios", envvar="NAGIOS_HOST", help="The hostname of your nagios installation")
+@_click.option("--socket", type=unicode, default="/var/lib/nagios3/rw/livestatus", envvar="NAGIOS_LIVESTATUS_SOCKET", help="The livestatus socket on your nagios host")
+@_click.option("-a", "--all-states", is_flag=True, help="Also consider services in OK state")
+@_click.argument("service-expr", required=False)
+@_click.argument("host-expr", required=False)
+def cli(host, socket, host_expr, service_expr, all_states):
+    _click.echo(
+        "\n".join(
+            hosts(
+                host,
+                socket,
+                service_expr,
+                host_expr,
+                all_states,
+            ),
         ),
     )
+
+
+if __name__ == "__main__":
+    cli()
+
