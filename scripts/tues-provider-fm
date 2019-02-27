@@ -8,6 +8,8 @@ Options:
   --foreman-url=<url>            URL to your foreman installation.
 """
 
+from __future__ import print_function
+
 import os as _os
 import functools as _ft
 
@@ -51,4 +53,4 @@ if __name__ == '__main__':
         )
 
     hosts = hosts(foreman_url, args['<expression>'])
-    print "\n".join(hosts)
+    print("\n".join(hosts))

@@ -7,8 +7,11 @@ Options:
   <path>                   Path to a file containing newline seperated hostnames
 """
 
+from __future__ import print_function
+
 import docopt as _docopt
+
 
 if __name__ == '__main__':
     args = _docopt.docopt(__doc__)
-    print open(args["<path>"]).read()
+    print(open(args["<path>"]).read())

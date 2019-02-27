@@ -17,6 +17,8 @@ Options:
   -w, --warn-only                     Do not abort execution on errors, only issue warnings
   -v, --verbose                       Produce more informational output
 """
+
+from __future__ import print_function
 import os as _os
 import sys as _sys
 import errno as _errno
@@ -31,6 +33,7 @@ import fabric.state as _fabric_state
 
 import tues as _tues # pylint: disable=import-self
 
+
 _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
 _fabric.env.colorize_errors = True
 _fabric.env.remote_interrupt = True
@@ -41,6 +44,7 @@ _fabric.env.always_use_pty = True
 pw = _os.environ.get("TUES_PW", None)
 if pw:
     _fabric.env.password = pw
+
 
 def run_cmd(cmd, user=None, put_files=None):
     shell_env = {}
@@ -87,9 +91,9 @@ if __name__ == "__main__":
         cmd = ["tues-provider-{}".format(args["<command>"])] + [args["<provider>"]]
 
     try:
-        output = _sp.check_output(cmd)
+        output = _sp.check_output(cmd).decode("utf-8")
         if args["<provider>"] == "--help":
-            print output
+            print(output)
             _sys.exit(0)
         hosts = [x for x in output.split("\n") if x and not x.startswith("#")]
     except OSError as e:
@@ -98,7 +102,7 @@ if __name__ == "__main__":
         _sys.stderr.write("ERROR: Provider {0!r} not found, make sure {1} is on your PATH\n".format(args["<provider>"], cmd[0]))
         _sys.exit(1)
     except _sp.CalledProcessError as e:
-        print e.output
+        print(e.output)
         _sys.exit(e.returncode)
 
     if args["<command>"]:
@@ -113,4 +117,4 @@ if __name__ == "__main__":
             hosts=hosts,
         )
     else:
-        print "\n".join(hosts)
+        print("\n".join(hosts))

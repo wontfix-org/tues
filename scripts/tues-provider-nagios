@@ -13,6 +13,8 @@ Options:
   --socket=<socket>              The path to the livestatus socket on the nagios server
 """
 
+from __future__ import print_function
+
 import os as _os
 import subprocess as _sp
 
@@ -46,12 +48,14 @@ if __name__ == '__main__':
         or _os.environ.get('NAGIOS_LIVESTATUS_SOCKET', '/var/lib/nagios3/rw/livestatus')
     )
 
-    print '\n'.join(
-        hosts(
-            nagios_host,
-            livestatus_socket,
-            args['<service-expr>'],
-            args['<host-expr>'],
-            args.get('-a', False),
+    print(
+        '\n'.join(
+            hosts(
+                nagios_host,
+                livestatus_socket,
+                args['<service-expr>'],
+                args['<host-expr>'],
+                args.get('-a', False),
+            ),
         ),
     )

@@ -12,9 +12,12 @@ Example:
   tues ls cl host1 host2 host3
 """
 
+from __future__ import print_function
+
 import docopt as _docopt
+
 
 if __name__ == '__main__':
     args = _docopt.docopt(__doc__)
     for host in args["<hosts>"]:
-        print host
+        print(host)

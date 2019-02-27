@@ -21,7 +21,7 @@ if __name__ == '__main__':
         platforms='any',
         setup_requires=['setuptools-markdown'],
         long_description_markdown_filename='README.md',
-        install_requires=['docopt', 'Fabric<2', 'requests>=2.4'],
+        install_requires=['docopt', 'fabric3', 'requests>=2.4'],
         classifiers=[
             'Programming Language :: Python',
             'Programming Language :: Python :: 2.7',
