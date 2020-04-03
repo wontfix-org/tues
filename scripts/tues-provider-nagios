@@ -23,19 +23,19 @@ import docopt as _docopt
 
 def hosts(host, socket, service_expr=None, host_expr=None, consider_all_states=False):
     proc = _sp.Popen('ssh {0} "unixcat {1}"'.format(host, socket), shell=True, stdin=_sp.PIPE, stdout=_sp.PIPE)
-    proc.stdin.write('GET services\nColumns: host_name\n')
+    proc.stdin.write(b'GET services\nColumns: host_name\n')
     if not consider_all_states:
-        proc.stdin.write('Filter: state != 0\n')
+        proc.stdin.write(b'Filter: state != 0\n')
 
     if service_expr is not None:
-        proc.stdin.write('Filter: description ~~ {0}\n'.format(service_expr))
+        proc.stdin.write('Filter: description ~~ {0}\n'.format(service_expr).encode('utf-8'))
 
     if host_expr is not None:
-        proc.stdin.write('Filter: host_name ~~ {0}\n'.format(host_expr))
+        proc.stdin.write('Filter: host_name ~~ {0}\n'.format(host_expr).encode('utf-8'))
 
     proc.stdin.close()
     try:
-        return set(_.strip() for _ in proc.stdout)
+        return set(_.decode('utf-8').strip() for _ in proc.stdout)
     finally:
         proc.terminate()
 
