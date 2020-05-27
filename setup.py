@@ -19,12 +19,13 @@ if __name__ == '__main__':
         scripts=_glob.glob('scripts/tues*'),
         include_package_data=True,
         platforms='any',
-        setup_requires=['setuptools-markdown'],
-        long_description_markdown_filename='README.md',
+        long_description=open("README.md").read(),
+        long_description_content_type="text/markdown",
         install_requires=['docopt', 'fabric3', 'requests>=2.4'],
         classifiers=[
             'Programming Language :: Python',
             'Programming Language :: Python :: 2.7',
+            'Programming Language :: Python :: 3',
             'Natural Language :: English',
         ],
     )
