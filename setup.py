@@ -21,7 +21,7 @@ if __name__ == '__main__':
         platforms='any',
         long_description=open("README.md").read(),
         long_description_content_type="text/markdown",
-        install_requires=['docopt', 'fabric3', 'requests>=2.4'],
+        install_requires=['click', 'fabric3', 'requests>=2.4'],
         classifiers=[
             'Programming Language :: Python',
             'Programming Language :: Python :: 2.7',
