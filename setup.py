@@ -24,7 +24,6 @@ if __name__ == '__main__':
         install_requires=['click', 'fabric3', 'requests>=2.4'],
         classifiers=[
             'Programming Language :: Python',
-            'Programming Language :: Python :: 2.7',
             'Programming Language :: Python :: 3',
             'Natural Language :: English',
         ],
