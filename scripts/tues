@@ -25,8 +25,6 @@ def run_cmd(cmd, user=None, put_files=None):
         else:
             _fabric.sudo(cmd, user=user)
 
-    _fabric_state.connections[_fabric.env.host_string].get_transport().close()
-
 
 @_contextlib.contextmanager
 def remote_files(paths):
@@ -93,7 +91,9 @@ def cli(
     _fabric.env.remote_interrupt = True
     _fabric.env.disable_known_hosts = True
     _fabric.env.skip_bad_hosts = True
+    _fabric.env.eagerly_disconnect = True
 
+    _fabric_state.output.status = False
 
     pw = _os.environ.get("TUES_PW", None)
     if pw:
