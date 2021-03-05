@@ -95,7 +95,7 @@ def remote_files(paths):
 @_click.option("-l", "--login-user", help="The user to login with")
 @_click.option("-p", "--parallel", is_flag=True, help="Run commands in parallel")
 @_click.option("-n", "--pool-size", default=10, help="The number of concurrent processes when -p is used")
-@_click.option("-t", "--no-pty", is_flag=True, help="Don't allocate pseudo tty")
+@_click.option("--pty/--no-pty", default=False, help="Don't allocate pseudo tty")
 @_click.option("-w", "--warn-only", is_flag=True, help="Do not abort execution on errors, only issue warnings")
 @_click.option("-v", "--verbose", is_flag=True, help="Produce more informational output")
 @_click.option("-N", "--no-prefix", is_flag=True, help="Don't output a prefix at the start of remote output lines")
@@ -118,7 +118,7 @@ def cli(
     login_user,
     parallel,
     pool_size,
-    no_pty,
+    pty,
     warn_only,
     verbose,
     files,
@@ -152,7 +152,7 @@ def cli(
     if parallel and user:
         _fabric.env.password = _getpass.getpass("Sudo Password:")
 
-    _fabric.env.always_use_pty = not no_pty
+    _fabric.env.always_use_pty = pty
 
     _fabric.env.user = login_user
 
