@@ -19,22 +19,45 @@ import fabric.operations as _fabric_operations
 import tues as _tues # pylint: disable=import-self
 
 
-def run_cmd(cmd, user=None, put_files=None, output_dir=None):
-    def _run_command_wrapper(wrapped, *args, **kwargs):
+def run_cmd(cmd, user=None, put_files=None, output_dir=None, output_command=None):
+    run_command_orig = _fabric_operations._run_command
+
+    def _run_command_wrapper(*args, **kwargs):
         outfile = None
+        proc = None
         if output_dir:
             outfile = open(_os.path.join(output_dir, _fabric_state.env.host_string), "wt")
             kwargs["stdout"] = outfile
 
+        if output_command:
+            proc = _sp.Popen(
+                output_command,
+                shell=True,
+                stdin=_sp.PIPE,
+                stdout=outfile,
+                # fabric3 passed str objects to `.write()`, no idea if this is what
+                # it is getting from paramiko or if it is a deliberate choice.
+                # I wonder when we'll be having fun with that again.....
+                text=True,
+                env=dict(_os.environ, TUES_HOST=_fabric_state.env.host_string),
+            )
+            kwargs["stdout"] = proc.stdin
+
         try:
-            return wrapped(*args, **kwargs)
+            result = run_command_orig(*args, **kwargs)
+            if proc:
+                # It seems we have to manually close stdin to get the subprocess to finish
+                # reading from it's stdin, no idea why there is no eof or something, I suppose
+                # everything is fine if closing still works though...
+                proc.stdin.close()
+                proc.wait()
+            return result
         finally:
             if outfile:
                 outfile.close()
 
-    run_command_orig = _fabric_operations._run_command
     with remote_files(put_files) as shell_env, _fabric.shell_env(**shell_env): # pylint: disable=not-context-manager
-        _fabric_operations._run_command = _ft.partial(_run_command_wrapper, run_command_orig)
+        _fabric_operations._run_command = _run_command_wrapper
         if user is None:
             _fabric.run(cmd)
         else:
@@ -77,6 +100,7 @@ def remote_files(paths):
 @_click.option("-v", "--verbose", is_flag=True, help="Produce more informational output")
 @_click.option("-N", "--no-prefix", is_flag=True, help="Don't output a prefix at the start of remote output lines")
 @_click.option("-d", "--output-dir", help="Store stdout into one file per host")
+@_click.option("-C", "--output-command", help="Run stdout through this command")
 @_click.version_option(_tues.__version__) # pylint: disable=c-extension-no-member
 @_click.option(
     "-f",
@@ -103,6 +127,7 @@ def cli(
     provider_args,
     no_prefix,
     output_dir,
+    output_command,
 ): # pylint: disable=too-many-locals
     _logging.basicConfig()
 
@@ -154,6 +179,7 @@ def cli(
                 user=user,
                 put_files=files,
                 output_dir=output_dir,
+                output_command=output_command,
             ),
             hosts=hosts,
         )
