@@ -29,18 +29,6 @@ export FOREMAN_URL="https://user:password@foreman.domain/"
 tues "ls" fm "class = my::class"
 ```
 
-### Nagios (via livestatus)
-
-Execute on all hosts with a given service pattern not in state OK
-
-```
-export NAGIOS_HOST="nagios"
-export NAGIOS_LIVESTATUS_SOCKET="/var/lib/nagios3/rw/livestatus"
-tues -u root "puppet agent run --test" nagios puppet_status
-```
-
-The values of the environment variables above are the defaults, you do not need to specify them if they match your setup.
-
 ### Custom Providers
 
 New providers may be added by putting a new executable with a name like "tues-provider-<name>"
