@@ -98,7 +98,7 @@ def remote_files(paths):
 @_click.option("--pty/--no-pty", default=False, help="Don't allocate pseudo tty")
 @_click.option("-w", "--warn-only", is_flag=True, help="Do not abort execution on errors, only issue warnings")
 @_click.option("-v", "--verbose", is_flag=True, help="Produce more informational output")
-@_click.option("-N", "--no-prefix", is_flag=True, help="Don't output a prefix at the start of remote output lines")
+@_click.option("-P/-N", "--prefix/--no-prefix", default=None, help="Don't output a prefix at the start of remote output lines")
 @_click.option("-d", "--output-dir", help="Store stdout into one file per host")
 @_click.option("-C", "--output-command", help="Run stdout through this command")
 @_click.version_option(_tues.__version__) # pylint: disable=c-extension-no-member
@@ -125,11 +125,14 @@ def cli(
     command,
     provider,
     provider_args,
-    no_prefix,
+    prefix,
     output_dir,
     output_command,
 ): # pylint: disable=too-many-locals
     _logging.basicConfig()
+
+    if prefix is None:
+        prefix = not (output_dir or output_command)
 
     _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
     _fabric.env.colorize_errors = True
@@ -138,7 +141,7 @@ def cli(
     _fabric.env.skip_bad_hosts = True
     _fabric.env.eagerly_disconnect = True
 
-    _fabric.env.output_prefix = not no_prefix
+    _fabric.env.output_prefix = prefix
     _fabric_state.output.status = False
 
     pw = _os.environ.get("TUES_PW", None)
