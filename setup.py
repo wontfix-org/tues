@@ -5,12 +5,11 @@ import glob as _glob
 
 import setuptools as _st
 
-import tues as _tues
 
 if __name__ == "__main__":
     _st.setup(
         name="tues",
-        version=_tues.__version__,
+        version="2.0.0rc3",
         url="https://github.com/wontfix-org/tues/",
         license="MIT",
         author="Michael van Bracht",
@@ -22,9 +21,10 @@ if __name__ == "__main__":
         platforms="any",
         long_description=open("README.md").read(),
         long_description_content_type="text/markdown",
-        install_requires=["click", "fabric3", "requests>=2.4"],
+        install_requires=["click", "asyncssh", "async-timeout", "requests>=2.4", "setuptools"],
         classifiers=[
-            "Programming Language :: Python :: 3",
             "Natural Language :: English",
+            "Programming Language :: Python :: 3",
         ],
+        requires_python=">=3.7",
     )
