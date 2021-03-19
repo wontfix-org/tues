@@ -4,14 +4,13 @@ Easily run commands on collections of hosts
 
 ## Install
 
- * Clone the repository
- * Run `python setup.py install` or `python setup.py develop` in a virtualenv
+ * Run `pip install tues`
 
 ## Getting Started
 
 Tues expects a command to execute, followed by the name of a hostname provider and its arguments.
 
-Execute on all hosts in file hostnames.
+Execute on all hosts in file `hostnames`.
 
 ```
 echo "localhost" > hostnames

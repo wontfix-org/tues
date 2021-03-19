@@ -1,191 +1,125 @@
 #!/usr/bin/env python3
 # coding: utf-8
+# pylint: disable=c-extension-no-member
 
 from __future__ import print_function, absolute_import
+
 import os as _os
 import sys as _sys
-import errno as _errno
 import functools as _ft
-import subprocess as _sp
-import getpass as _getpass
+import asyncio as _asyncio
 import logging as _logging
-import contextlib as _contextlib
 
 import click as _click
-import fabric.api as _fabric
-import fabric.state as _fabric_state
-import fabric.operations as _fabric_operations
+import pkg_resources as _pr
 
 import tues as _tues # pylint: disable=import-self
 
 
-def run_cmd(cmd, user=None, put_files=None, output_dir=None, output_command=None):
-    run_command_orig = _fabric_operations._run_command
-
-    def _run_command_wrapper(*args, **kwargs):
-        outfile = None
-        proc = None
-        if output_dir:
-            outfile = open(_os.path.join(output_dir, _fabric_state.env.host_string), "wt")
-            kwargs["stdout"] = outfile
-
-        if output_command:
-            proc = _sp.Popen(
-                output_command,
-                shell=True,
-                stdin=_sp.PIPE,
-                stdout=outfile,
-                # fabric3 passed str objects to `.write()`, no idea if this is what
-                # it is getting from paramiko or if it is a deliberate choice.
-                # I wonder when we'll be having fun with that again.....
-                text=True,
-                env=dict(_os.environ, TUES_HOST=_fabric_state.env.host_string),
-            )
-            kwargs["stdout"] = proc.stdin
-
-        try:
-            result = run_command_orig(*args, **kwargs)
-            if proc:
-                # It seems we have to manually close stdin to get the subprocess to finish
-                # reading from it's stdin, no idea why there is no eof or something, I suppose
-                # everything is fine if closing still works though...
-                proc.stdin.close()
-                proc.wait()
-            return result
-        finally:
-            if outfile:
-                outfile.close()
-
-    with remote_files(put_files) as shell_env, _fabric.shell_env(**shell_env): # pylint: disable=not-context-manager
-        _fabric_operations._run_command = _run_command_wrapper
-        if user is None:
-            _fabric.run(cmd)
-        else:
-            _fabric.sudo(cmd, user=user)
-        _fabric_operations._run_command = run_command_orig
-
-
-@_contextlib.contextmanager
-def remote_files(paths):
-    """Context manager that provides files specified by `paths` on the remote side
-
-    All files listed in paths are uploaded to the remote host. The resulting absolute paths are
-    provided in a dictionary with keys "TUES_FILE<n>" where <n> starts at one an matches the order
-    in `paths`. When the context is exited, the files are removed from the remote host.
-    """
-    remote_paths = []
-    env = {}
-    for pos, path in enumerate(paths or [], start=1):
-        put_res = _fabric.put(path)
-        if put_res.failed:
-            raise ValueError("Failed to upload file {}".format(path))
-        remote_path = str(put_res[0])
-        remote_paths.append(remote_path)
-        env["TUES_FILE{}".format(pos)] = remote_path
-
+def get_hosts(provider, args):
     try:
-        yield env
-    finally:
-        if remote_paths:
-            _fabric.run("rm {}".format(" ".join("'{}'".format(path) for path in remote_paths)))
+        return _tues.provider(provider, args)
+    except _tues.TuesError as e:
+        _click.echo(e.args[0])
+        _sys.exit(2)
 
 
-@_click.command(context_settings={"ignore_unknown_options": True})
+@_click.command(context_settings={"ignore_unknown_options": True, "auto_envvar_prefix": "TUES"})
 @_click.option("-u", "--user", help="The user to run the command as")
 @_click.option("-l", "--login-user", help="The user to login with")
-@_click.option("-p", "--parallel", is_flag=True, help="Run commands in parallel")
-@_click.option("-n", "--pool-size", default=10, help="The number of concurrent processes when -p is used")
+@_click.option("-n", "--pool-size", default=1, help="The number of concurrent tasks")
+@_click.option("-A", "--align-prefix", default=False, is_flag=True, help="Align all prefixes so output starts in the same column for all hosts")
 @_click.option("--pty/--no-pty", default=False, help="Don't allocate pseudo tty")
-@_click.option("-w", "--warn-only", is_flag=True, help="Do not abort execution on errors, only issue warnings")
+@_click.option("-c", "--check/--no-check", "check", is_flag=True, default=True, help="Do not abort execution on errors, only issue warnings")
 @_click.option("-v", "--verbose", is_flag=True, help="Produce more informational output")
-@_click.option("-P/-N", "--prefix/--no-prefix", default=None, help="Don't output a prefix at the start of remote output lines")
-@_click.option("-d", "--output-dir", help="Store stdout into one file per host")
-@_click.option("-C", "--output-command", help="Run stdout through this command")
-@_click.version_option(_tues.__version__) # pylint: disable=c-extension-no-member
+@_click.option("-P/-N", "--prefix/--no-prefix", default=True, is_flag=True, help="Don't output a prefix at the start of remote output lines")
+@_click.option("-d", "--output-dir", help="Store stdout into one file per host", type=_click.Path(dir_okay=True, file_okay=False, exists=True, writable=True))
+@_click.option("-s", "--script", is_flag=True, default=False, help="Consider <cmd> to be a local script to upload to and execute on the remote machines")
+@_click.version_option(_pr.get_distribution("tues").version) # pylint: disable=c-extension-no-member
 @_click.option(
     "-f",
     "--file",
     "files",
     multiple=True,
+    default=[],
     type=_click.Path(readable=True),
     help="File(s) to copy to the remove server. Paths are available on the remote as $TUES_FILE1 etc.",
 )
-@_click.argument("command", nargs=1, type=str)
-@_click.argument("provider", nargs=1, type=str)
-@_click.argument("provider_args", nargs=-1, type=_click.UNPROCESSED)
+@_click.option("--path", "path", multiple=True, type=_click.Path(), default=_tues.DEFAULT_PATH) 
+@_click.argument("cmd", nargs=1, type=str)
+@_click.argument("provider", nargs=1, type=str, required=False)
+@_click.argument("provider_args", nargs=-1, type=_click.UNPROCESSED, required=False)
+@_click.pass_context
 def cli(
+    ctx,
     user,
     login_user,
-    parallel,
     pool_size,
     pty,
-    warn_only,
+    check,
     verbose,
     files,
-    command,
+    cmd,
     provider,
     provider_args,
     prefix,
     output_dir,
-    output_command,
+    align_prefix,
+    script,
+    path,
 ): # pylint: disable=too-many-locals
-    _logging.basicConfig()
-
-    if prefix is None:
-        prefix = not (output_dir or output_command)
-
-    _fabric.env.use_ssh_config = _os.path.exists(_os.path.expanduser("~/.ssh/config"))
-    _fabric.env.colorize_errors = True
-    _fabric.env.remote_interrupt = True
-    _fabric.env.disable_known_hosts = True
-    _fabric.env.skip_bad_hosts = True
-    _fabric.env.eagerly_disconnect = True
-
-    _fabric.env.output_prefix = prefix
-    _fabric_state.output.status = False
-
-    pw = _os.environ.get("TUES_PW", None)
-    if pw:
-        _fabric.env.password = pw
-
-    _fabric.env.parallel = parallel
-    _fabric.env.pool_size = pool_size
-    _fabric.env.warn_only = warn_only
-
-    if parallel and user:
-        _fabric.env.password = _getpass.getpass("Sudo Password:")
-
-    _fabric.env.always_use_pty = pty
-
-    _fabric.env.user = login_user
-
-    cmd = ("tues-provider-{}".format(provider),) + provider_args
-
     try:
-        output = _sp.check_output(cmd).decode("utf-8")
-        hosts = [x for x in output.split("\n") if x and not x.startswith("#")]
-    except OSError as e:
-        if e.errno != _errno.ENOENT:
-            raise
-        _sys.stderr.write("ERROR: Provider {0!r} not found, make sure {1} is on your PATH\n".format(provider, cmd[0]))
-        _sys.exit(1)
-    except _sp.CalledProcessError as e:
-        print(e.output)
-        _sys.exit(e.returncode)
+        if provider:
+            hosts = get_hosts(provider, provider_args)
+        else:
+            hosts = None
 
-    if command:
-        _fabric_state.output["running"] = verbose
-        _fabric.execute(
-            _ft.partial(
-                run_cmd,
-                cmd=command,
+        if script:
+            def pick(name, value, default=None):
+                if ctx.get_parameter_source(name) == _click.core.ParameterSource.DEFAULT:
+                    return default
+                else:
+                    return value
+
+            # This is list of settings that will "override" settings in a script file only
+            # if they have been specified on the command line explicitly, we still prefer
+            # the scripts value over the options default value
+            overrides = [
+                ("user", user),
+                ("files", files),
+                ("output_dir", output_dir),
+                ("pty", pty),
+                ("pool_size", pool_size),
+                ("check", check),
+            ]
+
+            overrides = {
+                k:v for k, v in overrides if ctx.get_parameter_source(k) != _click.core.ParameterSource.DEFAULT
+            }
+
+            script = _tues.Script(cmd, paths=path)
+            script.run(
+                hosts,
+                prefix=prefix,
+                align_prefix=align_prefix,
+                **overrides,
+            )
+        else:
+            _tues.run(
+                hosts,
+                cmd=cmd,
                 user=user,
-                put_files=files,
+                prefix=prefix,
+                files=files,
                 output_dir=output_dir,
-                output_command=output_command,
-            ),
-            hosts=hosts,
-        )
+                pty=pty,
+                pool_size=pool_size,
+                check=not check and pool_size == 1,
+                align_prefix=align_prefix,
+
+            )
+    except _tues.TuesError as e:
+        raise _click.ClickException(*e.args)
 
 
 if __name__ == "__main__":
