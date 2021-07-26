@@ -24,7 +24,7 @@ $ tues -u root id cl localhost 127.0.0.1 ::1
 $
 ```
 
-There are switches to send output to a directory, one file per host (`-d <dir>`), run on multiple hosts at a time `-n <num>`, upload files to the remote host before executing the command `-f <file>` and also a mechanic to tread the executed command as a local script in `TUES_PATH` that needs to be uploaded to the host first.
+There are switches to send output to a directory, one file per host (`-d <dir>`), run on multiple hosts at a time `-n <num>`, upload files to the remote host before executing the command `-f <file>` and also a mechanic to treat the executed command as a local script in `TUES_PATH` that needs to be uploaded to the host first.
 
 ```
 $ echo 'ls "$@"' > myls
