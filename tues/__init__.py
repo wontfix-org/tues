@@ -313,7 +313,6 @@ class BufferedIO(_tempfile.SpooledTemporaryFile):
     def getvalue(self):
         try:
             pos = self.tell()
-            _log.debug("ORIGINAL POS %r %r", self, pos)
             self.seek(0)
             return self.read()
         finally:
