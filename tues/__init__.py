@@ -299,6 +299,12 @@ class Task:
 
 
 class BufferedIO(_tempfile.SpooledTemporaryFile):
+    """ Capture output into memory or into a tempfile if output is more than 4kb
+
+        Also borrow the `getvalue` interface from io.BytesIO so we don't have to
+        read from this file manually. We keep track of the current file position
+        and reset it as if "nothing ever happened" during read access.
+    """
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("max_size", 4096)
@@ -318,7 +324,13 @@ class BufferedIO(_tempfile.SpooledTemporaryFile):
 
 
 class PrefixWriter:
+    """ Add a prefix two every line of output produced on the wrapped file
 
+        Special care is taken not to blindly append a prefix every time we see
+        a newline. We wait for new bytes on the "next line" to be written before
+        we actually add the prefix, in order to not produce prefixes without any
+        actual content.
+    """
     def __init__(self, f, prefix):
         self._f = f
         self._fresh = True
@@ -369,7 +381,14 @@ class OutputWrapper:
 
 
 class OutputWriter:
+    """ Write output to its final destination
 
+        This class is supposed to be the one that wraps the "real" target of
+        our output. Because of that it is the only one doing bytes vs. str
+        handling as well as everything necessary to handle all the different
+        calling conventions for the `write` call, right now this is just
+        checking if `write` is async/a coroutine.
+    """
     def __init__(self, f, text, encoding, errors):
         self._f = f
         self._text = text
@@ -398,6 +417,16 @@ class OutputWriter:
 
 
 class SudoWriter:
+    """ Handle running `run` via sudo
+
+        This consists of two parts, first wrapping `run.cmd` in a call to sudo,
+        as well as intercepting all IO, looking for "sudo output", prompting for
+        a password if necessary, sending the password input to stdin of the
+        remote process, and finally run the `on_success` callback that is usually
+        responsible for sending the held back input to the wrapped programm which
+        can only be sent once we are past the prompt.
+    """
+
     # pylint: disable=too-many-instance-attributes
     PROMPT_TOKEN = b"TUES_SUDO_PASSWORD_PROMPT"
     SUCCESS_TOKEN = b"TUES_SUDO_PASSWORD_SUCCESS"
@@ -460,6 +489,12 @@ class SudoWriter:
 
 
 async def _prepare_io(run, stdout, stderr, env, pm, send_input):
+    """ Setup IO for `run`
+
+        Handle `run.outfile` as well as shared `stderr` und `stdout` handles, if set.
+        Wrap all handles in `OutputWriter` and ensure `PrefixWriter` and `SudoWriter`
+        wrappers are added if necessary.
+    """
     # pylint: disable=too-many-branches
     sudo = None
     cleanup = []
@@ -529,6 +564,11 @@ async def _prepare_io(run, stdout, stderr, env, pm, send_input):
 
 
 async def _redirect_io(session, stdout, stderr, sudo):
+    """ Setup IO redirection on `session`
+
+        Ensure we at least wrap the files in an `OutputWrapper` so the files
+        don't get automatically closed by asyncssh.
+    """
     if sudo:
         _log.debug("SUDO TO %r", session.stdin)
         #await session.redirect(stdin=_ssh.PIPE, stdout=None, stderr=None)
@@ -548,12 +588,11 @@ async def _redirect_io(session, stdout, stderr, sudo):
     _log.debug("STDERR %r", stderr)
     _log.debug("SUDO %r", sudo)
 
-
     await session.redirect(stdin=None, stdout=stdout, stderr=stderr or stdout)
 
 
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
-    """ The real "runner" funcion issued for every host """
+    """ The real "runner" function issued for every host """
     try:
         env = []
 
@@ -660,11 +699,12 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
 
             if sudo:
                 await sudo.close()
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-except
         _log.error("Error during run", exc_info=True)
 
 
 async def _wait_with_concurrency(tasks, pool_size):
+    """ Make sure we only run `pool_size` tasks at once """
     semaphore = _asyncio.Semaphore(pool_size)
 
     async def sem_task(task):
@@ -674,7 +714,7 @@ async def _wait_with_concurrency(tasks, pool_size):
 
 
 async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pylint: disable=too-many-locals
-
+    """ Run `tasks` with `pool_size` """
     tasks = (_run(_, pm, stdout, stderr) for _ in tasks)
 
     (_done, _pending) = await _wait_with_concurrency(tasks, pool_size)
