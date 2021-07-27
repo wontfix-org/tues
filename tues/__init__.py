@@ -696,8 +696,9 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
 
             for cb in cleanup:
                 cb()
-    except Exception as e: # pylint: disable=broad-except
+    except Exception:
         _log.error("Error during run", exc_info=True)
+        raise
 
 
 async def _wait_with_concurrency(tasks, pool_size):
