@@ -445,3 +445,10 @@ def test_script_parsing(tmp_path):
 
     run = script.run(capture_output=True, text=True)
     assert run.stdout == "foo"
+
+
+def test_taskerror_handles():
+    with _pytest.raises(_tues.TuesTaskError) as e:
+        _tues.run("localhost", "echo -n out ; echo -n err >&2 ; false", check=True, capture_output=True, text=True, cwd="/tmp")
+
+    assert e.value.stdout == "out" and e.value.stderr == "err"

@@ -65,11 +65,11 @@ class TuesTaskError(TuesError):
 
     @property
     def stdout(self):
-        self.args[0].stdout
+        return self.args[0].stdout
 
     @property
     def stderr(self):
-        self.args[0].stderr
+        return self.args[0].stderr
 
 
 def provider(provider, args):
