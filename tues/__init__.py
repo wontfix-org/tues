@@ -662,9 +662,11 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             if run.preexec_fn:
                 run.preexec_fn(run)
 
-            chan, session = await conn.create_session(
+            cmd = run.build_cmd()
+            _log.debug("Running %r", cmd)
+            _chan, session = await conn.create_session(
                 _ssh.SSHClientProcess,
-                run.build_cmd(),
+                cmd,
                 term_type=_os.environ.get("TERM"),
                 request_pty=run.pty,
                 env=env,
