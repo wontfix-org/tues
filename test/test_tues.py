@@ -284,6 +284,7 @@ def test_tues_run_with_files(user, text, pty):
         ],
         pty=pty,
         text=text,
+        cwd="/tmp",
     )
     assert_output(run.stdout, "test", run.stderr, "testerr", pty=pty, text=text)
 

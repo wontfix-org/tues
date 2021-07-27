@@ -263,8 +263,6 @@ class Task:
         self.encoding = encoding
         self.env = env
         self.cwd = cwd
-        if self.cwd:
-            self.precmds.append(f"cd {cwd}")
         self.capture_output = capture_output
         self.returncode = None
         self._stdout = None
@@ -295,6 +293,10 @@ class Task:
             precmds = " ; ".join(self.precmds) + " ; "
         else:
             precmds = ""
+
+        if self.cwd:
+            precmds = f"{precmds} cd {_shlex.quote(self.cwd)} ; "
+
         return self.cmdwrapper(f"{precmds}{self.cmd}")
 
 
@@ -612,7 +614,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
         for idx, f in enumerate(run.files, start=1):
             try:
                 await _ssh.scp(f, (conn, "./"), preserve=True)
-                env.append(f"TUES_FILE{idx}={_shlex.quote(_os.path.basename(f))}")
+                env.append(f"TUES_FILE{idx}=$PWD{_shlex.quote('/' + _os.path.basename(f))}")
             except _ssh.sftp.SFTPFailure as e:
                 raise TuesError(f"Could not upload {f} to {run.host}") from e
 
