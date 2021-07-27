@@ -3,7 +3,6 @@
 import os as _os
 import io as _io
 import pwd as _pwd
-import shutil as _shutil
 import getpass as _getpass
 import tempfile as _tempfile
 
@@ -80,7 +79,7 @@ def test_tues_run(pty, text):
     run = _tues.run("localhost", "id", capture_output=True, pty=pty, text=text)
     uid = _os.getuid()
     user = _os.environ["USER"]
-    assert f"uid={uid}({user})" in (run.stdout if text else run.stdout.decode())
+    assert f"uid={uid}({user})" in run.stdout if text else run.stdout.decode()
 
 
 def test_tues_run_with_cmdlist():
@@ -94,7 +93,7 @@ def test_tues_run_as_user(pty, text):
     user = "nobody"
     run = _tues.run("localhost", "id", capture_output=True, user=user, pty=pty, text=text)
     uid = _pwd.getpwnam(user).pw_uid
-    assert f"uid={uid}({user})" in (run.stdout if text else run.stdout.decode())
+    assert f"uid={uid}({user})" in run.stdout if text else run.stdout.decode()
 
 
 @pty_param
@@ -294,7 +293,7 @@ def test_tues_run_with_files(user, text, pty):
 @pty_param
 def test_tues_run_with_check(user, text, pty):
     with _pytest.raises(_tues.TuesTaskError):
-        run = _tues.run("localhost", "false", user=user, text=text, pty=pty, check=True)
+        _tues.run("localhost", "false", user=user, text=text, pty=pty, check=True)
 
 
 @user_param
@@ -317,7 +316,7 @@ def test_tues_run_with_stderr_pipe(capsys, user):
 def test_tues_run_with_stderr_stdout(capsys, user):
     run = _tues.run("localhost", "echo -n out ; echo -n err >&2", stderr=_tues.STDOUT, text=True, user=user, check=True)
     captured = capsys.readouterr()
-    assert run.stderr == None
+    assert run.stderr is None
     assert captured.out == "outerr"
 
 
@@ -325,7 +324,7 @@ def test_tues_run_with_stderr_stdout(capsys, user):
 def test_tues_run_with_stdout_devnull(user, capsys):
     run = _tues.run("localhost", "echo -n out ; echo -n err >&2", stdout=_tues.DEVNULL, stderr=_tues.PIPE, text=True, user=user, check=True)
     captured = capsys.readouterr()
-    assert run.stdout == None
+    assert run.stdout is None
     assert run.stderr == "err"
     assert captured.out == ""
 
@@ -334,7 +333,7 @@ def test_tues_run_with_stdout_devnull(user, capsys):
 def test_tues_run_with_stderr_devnull(user, capsys):
     run = _tues.run("localhost", "echo -n out ; echo -n err >&2", stdout=_tues.PIPE, stderr=_tues.DEVNULL, text=True, user=user, check=True)
     captured = capsys.readouterr()
-    assert run.stderr == None
+    assert run.stderr is None
     assert run.stdout == "out"
     assert captured.err == ""
 
@@ -389,7 +388,7 @@ def test_tues_run_multi_host():
 @encoding_param
 def test_tues_run_with_output_dir(user, pty, tmp_path, text, encoding):
     cwd = _os.getcwd()
-    run = _tues.run("localhost", f"python3 {cwd}/test/echo.py {encoding}", user=user, output_dir=str(tmp_path), text=text, pty=pty, encoding=encoding if text else None)
+    _tues.run("localhost", f"python3 {cwd}/test/echo.py {encoding}", user=user, output_dir=str(tmp_path), text=text, pty=pty, encoding=encoding if text else None)
     output = (tmp_path / "localhost").read_text(encoding=encoding)
     assert output.strip() == "föö"
 

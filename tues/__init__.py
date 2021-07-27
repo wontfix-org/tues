@@ -212,7 +212,7 @@ class Task:
         cwd=None,
         preexec_fn=None,
         postexec_fn=None,
-    ):
+    ): # pylint: disable=too-many-locals
         if encoding or errors:
             text = True
 
@@ -343,18 +343,24 @@ class PrefixWriter:
 
 
 class OutputWrapper:
+    """ Toplevel wrapper for our output handlers
+
+        This wrapper serves two purposes:
+
+          * Log the "original" writes, so we can easily debug problems in output handling
+          * Drop calls to `close`, asyncssh will close files we pass it for stdout/stderr
+            but we do not really want those to be closed, because we pass in sys.stdxxx as
+            well as files created from the `tempfile` module we can't really open again.
+    """
 
     def __init__(self, f):
         self._f = f
 
     async def write(self, data):
         try:
-            #_log.debug("PREWRAPPED WRITE %r %r %r", self, (data,) + args, kwargs)
-            #data = data if self._text is False else data.decode(self._encoding, self._errors)
             _log.debug("OutputWrapper %r.write(%r)", self._f, data)
             return await self._f.write(data)
-        except Exception as e:
-            #_tb.print_exc()
+        except Exception:
             _log.error("Error during %r.write(%r)", self._f, data, exc_info=True)
             raise
 
@@ -379,8 +385,7 @@ class OutputWriter:
         try:
             if _inspect.iscoroutine(w):
                 return await w
-            else:
-                return w
+            return w
         finally:
             if flush:
                 self._f.flush()
@@ -434,7 +439,6 @@ class SudoWriter:
 
         if not self._on_success:
             self._waiting = False
-
 
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
@@ -710,7 +714,7 @@ def run(
     cwd=None,
     preexec_fn=None,
     postexec_fn=None,
-):
+): # pylint: disable=too-many-locals
     """
         Run `cmd` on all `hosts`.
 
