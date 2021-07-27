@@ -485,9 +485,6 @@ class SudoWriter:
             _log.debug("SudoWriter %r.write(%r)", self._f, data)
             return await self._f.write(data)
 
-    async def close(self):
-        """Ignore close"""
-
 
 async def _prepare_io(run, stdout, stderr, env, pm, send_input):
     """ Setup IO for `run`
@@ -699,9 +696,6 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
 
             for cb in cleanup:
                 cb()
-
-            if sudo:
-                await sudo.close()
     except Exception as e: # pylint: disable=broad-except
         _log.error("Error during run", exc_info=True)
 
