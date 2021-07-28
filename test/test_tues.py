@@ -390,7 +390,7 @@ def test_tues_run_multi_host():
 def test_tues_run_with_output_dir(user, pty, tmp_path, text, encoding):
     cwd = _os.getcwd()
     _tues.run("localhost", f"python3 {cwd}/test/echo.py {encoding}", user=user, output_dir=str(tmp_path), text=text, pty=pty, encoding=encoding if text else None)
-    output = (tmp_path / "localhost").read_text(encoding=encoding)
+    output = (tmp_path / "localhost.log").read_text(encoding=encoding)
     assert output.strip() == "föö"
 
 
@@ -452,3 +452,37 @@ def test_taskerror_handles():
         _tues.run("localhost", "echo -n out ; echo -n err >&2 ; false", check=True, capture_output=True, text=True, cwd="/tmp")
 
     assert e.value.stdout == "out" and e.value.stderr == "err"
+
+
+def test_output_dir_strategy_abort(tmp_path):
+    o = (tmp_path / "output")
+    o.mkdir()
+    with _pytest.raises(_tues.TuesOutputDirExists):
+        _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_ABORT)
+
+
+def test_output_dir_strategy_ignore(tmp_path):
+    o = (tmp_path / "output")
+    o.mkdir()
+    (o / "foo.log").touch()
+    _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_IGNORE)
+    assert (o / "localhost.log").exists() and (o / "foo.log").exists()
+
+def test_output_dir_strategy_wipe(tmp_path):
+    o = (tmp_path / "output")
+    o.mkdir()
+    (o / "foo").touch()
+    (o / "foo.log").touch()
+    _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_WIPE)
+    assert [_.name for _ in o.iterdir()] == ["localhost.log", "foo"]
+
+
+def test_output_dir_strategy_rotate(tmp_path):
+    o = (tmp_path / "output")
+    o.mkdir()
+    (o / "old_dir" ).touch()
+    (tmp_path / "output.1").mkdir()
+    (tmp_path / "output.unrelated").mkdir()
+    (tmp_path / "output.unrelatedfile").touch()
+    _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_ROTATE)
+    assert (o / "localhost.log").exists() and (tmp_path / "output.2" / "old_dir").exists()

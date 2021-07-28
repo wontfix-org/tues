@@ -36,6 +36,13 @@ def get_hosts(provider, args):
 @_click.option("-s", "--script", is_flag=True, default=False, help="Consider <cmd> to be a local script to upload to and execute on the remote machines")
 @_click.option("-p", "--parallel", is_flag=True, default=False, help="Deprecated: Will set `-n 10` to cause parallel execution of tasks")
 @_click.option("-v/-q", "--verbose/--quiet", default=None, help="Do not output additional information like start/finish indicators")
+@_click.option(
+    "-S",
+    "--output-dir-strategy",
+    default=_tues.DIR_IGNORE,
+    type=_click.Choice([_tues.DIR_IGNORE, _tues.DIR_ABORT, _tues.DIR_WIPE, _tues.DIR_ROTATE]),
+    help="How to handle an existing output directory",
+)
 @_click.version_option(_pr.get_distribution("tues").version) # pylint: disable=c-extension-no-member
 @_click.option(
     "-f",
@@ -69,6 +76,7 @@ def cli(
     script,
     path,
     parallel,
+    output_dir_strategy,
 ): # pylint: disable=too-many-locals
     if verbose is None:
         if output_dir:
@@ -118,6 +126,7 @@ def cli(
                 ("pty", pty),
                 ("pool_size", pool_size),
                 ("check", check),
+                ("output_dir_strategy", output_dir_strategy),
             ]
 
             overrides = {
@@ -147,6 +156,7 @@ def cli(
                 align_prefix=align_prefix,
                 preexec_fn=start_host,
                 postexec_fn=finish_host,
+                output_dir_strategy=output_dir_strategy,
             )
     except _tues.TuesError as e:
         raise _click.ClickException(*e.args)

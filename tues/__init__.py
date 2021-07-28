@@ -8,6 +8,7 @@ import io as _io
 import sys as _sys
 import json as _json
 import enum as _enum
+import glob as _glob
 import shlex as _shlex
 import errno as _errno
 import traceback as _tb
@@ -27,6 +28,13 @@ import async_timeout as _timeout
 PIPE = _ssh.PIPE
 STDOUT = _ssh.STDOUT
 DEVNULL = _ssh.DEVNULL
+
+
+DIR_ABORT = "abort"
+DIR_ROTATE = "rotate"
+DIR_WIPE = "wipe"
+DIR_IGNORE = "ignore"
+
 
 DEFAULT_ENCODING = _locale.getpreferredencoding()
 
@@ -58,6 +66,10 @@ class TuesLookupError(TuesError):
 
 
 class TuesScriptNotFoundError(TuesError):
+    pass
+
+
+class TuesOutputDirExists(TuesError):
     pass
 
 
@@ -142,6 +154,7 @@ class Script:
             "files",
             "outfile",
             "output_dir",
+            "output_dir_strategy",
             "prefix",
             "user",
             "pty",
@@ -726,6 +739,36 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
                 _tb.print_exception(type(exc), exc, exc.__traceback__)
 
 
+def _prepare_output_dir(path, strategy):
+    if not _os.path.exists(path):
+        _os.makedirs(path)
+        return
+
+    if strategy == DIR_ABORT:
+        raise TuesOutputDirExists(f"Output directory {path!r} already exists, aborting")
+
+    if strategy == DIR_IGNORE:
+        return
+
+    if strategy == DIR_WIPE:
+        for item in _glob.glob(_os.path.join(path, "*.log")):
+            _os.unlink(_os.path.join(path, item))
+    elif strategy == DIR_ROTATE:
+        candidates = _glob.glob(f"{path}.*")
+        indices = []
+        for index in [_.rsplit(".", 1)[1] for _ in candidates]:
+            try:
+                indices.append(int(index))
+            except ValueError:
+                # We ignore paths we cannot cast to int, maybe the user has an
+                # unrelated directory matching the glob laying around, but that
+                # is no reason to abort the run
+                pass
+        next_index = max(indices, default=0) + 1
+        _os.rename(path, f"{path}.{next_index}")
+        _os.mkdir(path)
+
+
 def run(
     hosts,
     cmd,
@@ -752,6 +795,7 @@ def run(
     cwd=None,
     preexec_fn=None,
     postexec_fn=None,
+    output_dir_strategy=DIR_IGNORE,
 ): # pylint: disable=too-many-locals
     """
         Run `cmd` on all `hosts`.
@@ -868,9 +912,11 @@ def run(
                 is created and used internally, you don't need to `await` anything.
 
     """
-    #_log.debug("RUN %r", locals())
     if isinstance(hosts, str):
         hosts = [hosts]
+
+    if output_dir:
+        _prepare_output_dir(output_dir, output_dir_strategy)
 
     host_width = max(len(_) for _ in hosts)
 
@@ -880,7 +926,7 @@ def run(
             cmd=cmd,
             login_user=login_user,
             files=files,
-            outfile=_os.path.join(output_dir, host) if output_dir else None,
+            outfile=_os.path.join(output_dir, host + ".log") if output_dir else None,
             prefix=prefix,
             prefix_width_hint=host_width if align_prefix else None,
             user=user,
