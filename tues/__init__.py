@@ -19,6 +19,7 @@ import asyncio as _asyncio
 import logging as _logging
 import inspect as _inspect
 import tempfile as _tempfile
+import urllib.parse as _urlparse
 
 import click as _click
 import asyncssh as _ssh
@@ -260,13 +261,17 @@ class Task:
         if files is None:
             files = []
 
-        if host is None and connection is None:
-            raise RuntimeError("You need to either provide a `host` or `connection` argument")
-
         if isinstance(cmd, list):
             cmd = _shlex_join(cmd)
 
-        self.host = host
+        if host is not None and not isinstance(host, Host):
+            host = Host(host)
+        elif host is None and connection is None:
+            raise RuntimeError("You need to either provide a `host` or `connection` argument")
+
+        self.host = host.name
+        self.port = host.port
+
         self.connection = connection
         self.cmd = cmd
         self.precmds = []
@@ -275,7 +280,7 @@ class Task:
         self.files = files
         self.outfile = outfile
         self.prefix = prefix
-        self.prefix_width_hint = prefix_width_hint or len(host)
+        self.prefix_width_hint = prefix_width_hint or len(self.host)
         self.user = user
         self.pty = pty
         self.input = input
@@ -805,6 +810,17 @@ def _prepare_output_dir(path, strategy):
         _os.mkdir(path)
 
 
+class Host:
+
+    def __init__(self, spec):
+        if isinstance(spec, tuple):
+            self.name, self.port = spec
+        elif isinstance(spec, str):
+            parsed = _urlparse.urlparse(f"ssh://{spec}")
+            self.name = parsed.hostname
+            self.port = parsed.port
+
+
 def run(
     hosts,
     cmd,
@@ -948,13 +964,15 @@ def run(
                 is created and used internally, you don't need to `await` anything.
 
     """
-    if isinstance(hosts, str):
+    if isinstance(hosts, (str, tuple)):
         hosts = [hosts]
+
+    hosts = [Host(_) for _ in hosts]
 
     if output_dir:
         _prepare_output_dir(output_dir, output_dir_strategy)
 
-    host_width = max(len(_) for _ in hosts)
+    host_width = max(len(_.name) for _ in hosts)
 
     tasks = [
         Task(
@@ -962,7 +980,7 @@ def run(
             cmd=cmd,
             login_user=login_user,
             files=files,
-            outfile=_os.path.join(output_dir, host + ".log") if output_dir else None,
+            outfile=_os.path.join(output_dir, host.name + ".log") if output_dir else None,
             prefix=prefix,
             prefix_width_hint=host_width if align_prefix else None,
             user=user,
