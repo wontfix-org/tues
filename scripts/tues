@@ -29,7 +29,7 @@ def get_hosts(provider, args):
 @_click.option("-l", "--login-user", help="The user to login with")
 @_click.option("-n", "--pool-size", default=1, help="The number of concurrent tasks")
 @_click.option("-A", "--align-prefix", default=False, is_flag=True, help="Align all prefixes so output starts in the same column for all hosts")
-@_click.option("--pty/--no-pty", default=False, help="Don't allocate pseudo tty")
+@_click.option("--pty/--no-pty", default=True, help="Don't allocate pseudo tty")
 @_click.option("-c", "--check/--no-check", "check", is_flag=True, default=True, help="Do not abort execution on errors, only issue warnings")
 @_click.option("-P/-N", "--prefix/--no-prefix", default=True, is_flag=True, help="Don't output a prefix at the start of remote output lines")
 @_click.option("-d", "--output-dir", help="Store stdout into one file per host", type=_click.Path(dir_okay=True, file_okay=False, exists=True, writable=True))

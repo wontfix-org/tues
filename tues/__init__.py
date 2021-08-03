@@ -282,6 +282,7 @@ class Task:
         self._stderr = None
         self.preexec_fn = preexec_fn
         self.postexec_fn = postexec_fn
+        self._session = None
 
     @property
     def stdout(self):
@@ -311,6 +312,18 @@ class Task:
             precmds = f"{precmds} cd {_shlex.quote(self.cwd)} ; "
 
         return self.cmdwrapper(f"{precmds}{self.cmd}")
+
+    def cleanup(self):
+        if not self._session:
+            return
+
+        if not self.pty:
+            if self.user:
+                _log.warning("Cannot terminate remote command when running as another user without pty mode, this may lead to hanging processes on the remote server")
+            else:
+                self._session.terminate()
+        else:
+            self._session.stdin.write(b"\x03")
 
 
 class BufferedIO(_tempfile.SpooledTemporaryFile):
@@ -613,8 +626,11 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
         # soon as we are done with the run, so we don't "leak" connections
         # when iterating over a large number of hosts
         if run.connection is None:
-            async with _timeout.timeout(10):
-                conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user)
+            try:
+                async with _timeout.timeout(10):
+                    run.connection = conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
+            except Exception as e:
+                raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
         else:
             conn = run.connection
 
@@ -691,7 +707,12 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             if not sudo:
                 await send_input()
 
+            # Since we won't receive the KeyboardInterrupt here, we need to store the
+            # session in a way that will allow us to call `task.session.terminate()`
+            # from a location that does see it.
+            run._session = session
             completed = await session.wait()
+            run._session = None
 
             run.returncode = completed.returncode
 
@@ -950,17 +971,21 @@ def run(
         except RuntimeError:
             loop = _asyncio.get_event_loop()
 
-    if pool_size > 1:
-        if check:
-            raise TuesError("Aborting on errors is not supported when running with a pool size > 1")
-        result = loop.run_until_complete(
-            run_tasks(tasks, pm, stdout, stderr, pool_size),
-        )
-    else:
+    try:
+        if pool_size > 1:
+            if check:
+                raise TuesError("Aborting on errors is not supported when running with a pool size > 1")
+            result = loop.run_until_complete(
+                run_tasks(tasks, pm, stdout, stderr, pool_size),
+            )
+        else:
+            for task in tasks:
+                result = loop.run_until_complete(_run(task, pm, stdout, stderr))
+                if check and result.returncode > 0:
+                    raise TuesTaskError(task)
+    except KeyboardInterrupt as e:
         for task in tasks:
-            result = loop.run_until_complete(_run(task, pm, stdout, stderr))
-            if check and result.returncode > 0:
-                raise TuesTaskError(task)
+            task.cleanup()
 
     if len(tasks) > 1:
         return tasks
