@@ -631,122 +631,117 @@ async def _redirect_io(session, stdout, stderr, sudo):
 
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
     """ The real "runner" function issued for every host """
-    try:
-        env = []
+    env = []
 
-        # Either use an already existing connection on the `run` object
-        # or make a new one from `.host` and `.login_user`, in the later
-        # case, do *not* write it back to the run, but get rid of it as
-        # soon as we are done with the run, so we don't "leak" connections
-        # when iterating over a large number of hosts
-        if run.connection is None:
-            try:
-                async with _timeout.timeout(10):
-                    run.connection = conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
-            except Exception as e:
-                raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
-        else:
-            conn = run.connection
-
-        # Copy files to the remote environment and put their names into `TUES_FILE<x>`,
-        # even though you know the name you just put into the `files` list anyway...
-        # I have no idea why I added this environment variables to be honest...
-        for idx, f in enumerate(run.files, start=1):
-            try:
-                await _ssh.scp(f, (conn, "./"), preserve=True)
-                env.append(f"TUES_FILE{idx}=$PWD{_shlex.quote('/' + _os.path.basename(f))}")
-            except _ssh.sftp.SFTPFailure as e:
-                raise TuesError(f"Could not upload {f} to {run.host}") from e
-
-        # If there is any input to be written to the executed commands' stdin, we
-        # can write it immediately if we don't have to handle sudo situation, otherwise
-        # we need to hold back the input until we are past the sudo prompt
-        if run.input or run.stdin:
-            async def send_input():
-                if run.input:
-                    input = run.input if not run.text else run.input.encode(run.encoding, run.errors)
-                    #_log.debug("RUN INPUT %r %r", run.text, input)
-                    session.stdin.write(input)
-                    await session.stdin.drain()
-                elif isinstance(run.stdin, (str, bytes)):
-                    with open(run.stdin, "rb") as f:
-                        while True:
-                            buf = f.read(4096)
-                            if buf:
-                                session.stdin.write(buf)
-                                await session.stdin.drain()
-                            if len(buf) < 4096:
-                                break
-                elif isinstance(run.stdin, (_io.StringIO, _io.BytesIO)):
-                    input = run.stdin.getvalue()
-                    if isinstance(input, str):
-                        input = input.encode(run.encoding, run.errors)
-                    session.stdin.write(input)
-                    await session.stdin.drain()
-                session.stdin.write_eof()
-        else:
-            async def send_input():
-                pass
-
-        if run.env:
-            env.extend(f"{k}={_shlex.quote(v)}" for k, v in run.env.items())
-
-        stdout, stderr, sudo, cleanup = await _prepare_io(
-            run,
-            stdout,
-            stderr,
-            env,
-            pm,
-            send_input,
-        )
-
+    # Either use an already existing connection on the `run` object
+    # or make a new one from `.host` and `.login_user`, in the later
+    # case, do *not* write it back to the run, but get rid of it as
+    # soon as we are done with the run, so we don't "leak" connections
+    # when iterating over a large number of hosts
+    if run.connection is None:
         try:
-            if run.preexec_fn:
-                run.preexec_fn(run)
+            async with _timeout.timeout(10):
+                run.connection = conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
+        except Exception as e:
+            raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
+    else:
+        conn = run.connection
 
-            cmd = run.build_cmd()
-            _log.debug("Running %r", cmd)
-            _chan, session = await conn.create_session(
-                _ssh.SSHClientProcess,
-                cmd,
-                term_type=_os.environ.get("TERM"),
-                request_pty=run.pty,
-                env=env,
-                # If we don't "force" them to None, some kind of autodetection will take place
-                # and we'll end up receiving `str` objects in some scenarios.
-                encoding=None,
-                errors=None,
-            )
-            await _redirect_io(session, stdout, stderr, sudo)
-            if not sudo:
-                await send_input()
+    # Copy files to the remote environment and put their names into `TUES_FILE<x>`,
+    # even though you know the name you just put into the `files` list anyway...
+    # I have no idea why I added this environment variables to be honest...
+    for idx, f in enumerate(run.files, start=1):
+        try:
+            await _ssh.scp(f, (conn, "./"), preserve=True)
+            env.append(f"TUES_FILE{idx}=$PWD{_shlex.quote('/' + _os.path.basename(f))}")
+        except _ssh.sftp.SFTPFailure as e:
+            raise TuesError(f"Could not upload {f} to {run.host}") from e
 
-            # Since we won't receive the KeyboardInterrupt here, we need to store the
-            # session in a way that will allow us to call `task.session.terminate()`
-            # from a location that does see it.
-            run._session = session
-            completed = await session.wait()
-            run._session = None
+    # If there is any input to be written to the executed commands' stdin, we
+    # can write it immediately if we don't have to handle sudo situation, otherwise
+    # we need to hold back the input until we are past the sudo prompt
+    if run.input or run.stdin:
+        async def send_input():
+            if run.input:
+                input = run.input if not run.text else run.input.encode(run.encoding, run.errors)
+                session.stdin.write(input)
+                await session.stdin.drain()
+            elif isinstance(run.stdin, (str, bytes)):
+                with open(run.stdin, "rb") as f:
+                    while True:
+                        buf = f.read(4096)
+                        if buf:
+                            session.stdin.write(buf)
+                            await session.stdin.drain()
+                        if len(buf) < 4096:
+                            break
+            elif isinstance(run.stdin, (_io.StringIO, _io.BytesIO)):
+                input = run.stdin.getvalue()
+                if isinstance(input, str):
+                    input = input.encode(run.encoding, run.errors)
+                session.stdin.write(input)
+                await session.stdin.drain()
+            session.stdin.write_eof()
+    else:
+        async def send_input():
+            pass
 
-            run.returncode = completed.returncode
+    if run.env:
+        env.extend(f"{k}={_shlex.quote(v)}" for k, v in run.env.items())
 
-            if run.postexec_fn:
-                run.postexec_fn(run)
+    stdout, stderr, sudo, cleanup = await _prepare_io(
+        run,
+        stdout,
+        stderr,
+        env,
+        pm,
+        send_input,
+    )
 
-            return run
-        finally:
-            if conn:
-                if run.files:
-                    await conn.run(b"rm -f " + b" ".join([_shlex.quote(_os.path.basename(_)).encode() for _ in run.files]))
+    try:
+        if run.preexec_fn:
+            run.preexec_fn(run)
 
-                if not run.connection:
-                    conn.close()
+        cmd = run.build_cmd()
+        _log.debug("Running %r", cmd)
+        _chan, session = await conn.create_session(
+            _ssh.SSHClientProcess,
+            cmd,
+            term_type=_os.environ.get("TERM"),
+            request_pty=run.pty,
+            env=env,
+            # If we don't "force" them to None, some kind of autodetection will take place
+            # and we'll end up receiving `str` objects in some scenarios.
+            encoding=None,
+            errors=None,
+        )
+        await _redirect_io(session, stdout, stderr, sudo)
+        if not sudo:
+            await send_input()
 
-            for cb in cleanup:
-                cb()
-    except Exception:
-        _log.error("Error during run", exc_info=True)
-        raise
+        # Since we won't receive the KeyboardInterrupt here, we need to store the
+        # session in a way that will allow us to call `task.session.terminate()`
+        # from a location that does see it.
+        run._session = session
+        completed = await session.wait()
+        run._session = None
+
+        run.returncode = completed.returncode
+
+        if run.postexec_fn:
+            run.postexec_fn(run)
+
+        return run
+    finally:
+        if conn:
+            if run.files:
+                await conn.run(b"rm -f " + b" ".join([_shlex.quote(_os.path.basename(_)).encode() for _ in run.files]))
+
+            if not run.connection:
+                conn.close()
+
+        for cb in cleanup:
+            cb()
 
 
 async def _wait_with_concurrency(tasks, pool_size):
