@@ -61,6 +61,15 @@ class TuesError(Exception):
     pass
 
 
+class TuesErrorGroup(TuesError):
+
+    def __init__(self, message, exceptions, results):
+        self.args = [message]
+        self.message = message
+        self.exceptions = exceptions
+        self.results = results
+
+
 class TuesLookupError(TuesError):
     pass
 
@@ -751,13 +760,19 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
 
     (_done, _pending) = await _wait_with_concurrency(tasks, pool_size)
 
+    excs = []
+    results = []
     for d in _done:
         exc = d.exception()
         if exc:
-            if isinstance(exc, OSError):
-                print(exc.args)
-            else:
-                _tb.print_exception(type(exc), exc, exc.__traceback__)
+            excs.append(exc)
+        else:
+            results.append(d.result())
+
+    if excs:
+        raise TuesErrorGroup("Errors encountered while running tasks with concurrency", excs, results)
+
+    return results
 
 
 def _prepare_output_dir(path, strategy):

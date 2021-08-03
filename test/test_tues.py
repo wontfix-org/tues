@@ -486,3 +486,9 @@ def test_output_dir_strategy_rotate(tmp_path):
     (tmp_path / "output.unrelatedfile").touch()
     _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_ROTATE)
     assert (o / "localhost.log").exists() and (tmp_path / "output.2" / "old_dir").exists()
+
+
+def test_tues_error_group():
+    with _pytest.raises(_tues.TuesErrorGroup) as e:
+        _tues.run(["localhost", ("localhost", 9)], "id", pool_size=2, capture_output=True)
+    assert len(e.value.exceptions) == 1 and len(e.value.results) == 1

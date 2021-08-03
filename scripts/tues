@@ -158,8 +158,12 @@ def cli(
                 postexec_fn=finish_host,
                 output_dir_strategy=output_dir_strategy,
             )
+    except _tues.TuesErrorGroup as e:
+        _click.echo(e)
+        for exc in e.exceptions:
+            _click.echo(exc)
     except _tues.TuesError as e:
-        raise _click.ClickException(*e.args)
+        raise _click.ClickException(str(e))
 
 
 if __name__ == "__main__":
