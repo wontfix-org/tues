@@ -9,7 +9,7 @@ import setuptools as _st
 if __name__ == "__main__":
     _st.setup(
         name="tues",
-        version="2.0.1",
+        version="2.1.0",
         url="https://github.com/wontfix-org/tues/",
         license="MIT",
         author="Michael van Bracht",
