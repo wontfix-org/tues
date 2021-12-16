@@ -35,6 +35,7 @@ def get_hosts(provider, args):
 @_click.option("-d", "--output-dir", help="Store stdout into one file per host", type=_click.Path(dir_okay=True, file_okay=False, exists=True, writable=True))
 @_click.option("-s", "--script", is_flag=True, default=False, help="Consider <cmd> to be a local script to upload to and execute on the remote machines")
 @_click.option("-p", "--parallel", is_flag=True, default=False, help="Deprecated: Will set `-n 10` to cause parallel execution of tasks")
+@_click.option("-w", "--wait", is_flag=True, default=False, help="Wait after execution on every host before moving on (ignored when `parallel` is used)")
 @_click.option("-v/-q", "--verbose/--quiet", default=None, help="Do not output additional information like start/finish indicators")
 @_click.option(
     "-S",
@@ -76,6 +77,7 @@ def cli(
     script,
     path,
     parallel,
+    wait,
     output_dir_strategy,
 ): # pylint: disable=too-many-locals
     if verbose is None:
@@ -87,6 +89,9 @@ def cli(
     if output_dir:
         prefix = False
         ctx.set_parameter_source("prefix", ctx.get_parameter_source("output_dir"))
+
+    if parallel and wait:
+        wait = False
 
     if parallel and pool_size == 1:
         pool_size = 10
@@ -100,7 +105,7 @@ def cli(
             _click.secho(f"Starting {task.host}", bold=True)
 
     def finish_host(task):
-        if verbose: 
+        if verbose:
             _click.secho(f"Finished {task.host}", bold=True)
 
     try:
@@ -108,6 +113,18 @@ def cli(
             hosts = get_hosts(provider, provider_args)
         else:
             hosts = None
+
+        if wait:
+            last_host = hosts[-1] if hosts else None
+
+            def wait(func):
+                def _wait(task):
+                    func(task)
+                    if task.host != last_host:
+                        _click.prompt("Press <ENTER> to continue", default="", show_default=False)
+                return _wait
+
+            finish_host = wait(finish_host)
 
         if script:
             def pick(name, value, default=None):
