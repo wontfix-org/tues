@@ -90,15 +90,15 @@ def cli(
         prefix = False
         ctx.set_parameter_source("prefix", ctx.get_parameter_source("output_dir"))
 
-    if parallel and wait:
-        wait = False
-
     if parallel and pool_size == 1:
         pool_size = 10
         # Since this is a compat option that influence a value of another option
         # we need to "fix" the parameter source in order for the overrides detection
         # down in the `if script` branch to work properly
         ctx.set_parameter_source("pool_size", ctx.get_parameter_source("parallel"))
+
+    if pool_size > 1 and wait:
+        raise _click.UsageError("Unable to run in parallel mode while also waiting after each host")
 
     def start_host(task):
         if verbose:
