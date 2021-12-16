@@ -474,7 +474,7 @@ def test_output_dir_strategy_wipe(tmp_path):
     (o / "foo").touch()
     (o / "foo.log").touch()
     _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_WIPE)
-    assert [_.name for _ in o.iterdir()] == ["localhost.log", "foo"]
+    assert set([_.name for _ in o.iterdir()]) == set(["localhost.log", "foo"])
 
 
 def test_output_dir_strategy_rotate(tmp_path):
