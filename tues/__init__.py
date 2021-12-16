@@ -641,7 +641,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if run.connection is None:
         try:
             async with _timeout.timeout(10):
-                run.connection = conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
+                conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
         except Exception as e:
             raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
     else:
@@ -737,6 +737,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             if run.files:
                 await conn.run(b"rm -f " + b" ".join([_shlex.quote(_os.path.basename(_)).encode() for _ in run.files]))
 
+            # We used a connection from the run object, don't close it
             if not run.connection:
                 conn.close()
 
