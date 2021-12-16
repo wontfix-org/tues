@@ -114,8 +114,8 @@ def cli(
         else:
             hosts = None
 
-        if wait:
-            last_host = hosts[-1] if hosts else None
+        if wait and hosts:
+            last_host = hosts[-1]
 
             def wait(func):
                 def _wait(task):
