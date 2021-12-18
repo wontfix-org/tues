@@ -23,26 +23,16 @@ def all_params(func):
     return func
 
 
-class PasswordManager(_tues.PasswordManager):
-
-    def get(self):
-        raise Exception("Cannot prompt password during test runs, please initialize a password manager with a pre-stored password")
-
-
-@_pytest.fixture(scope="module")
-def password_manager(pytestconfig):
-    password = _os.environ.get("TUES_PW")
-    if password is None:
-        capmanager = pytestconfig.pluginmanager.getplugin('capturemanager')
-        capmanager.suspend_global_capture(in_=True)
-        password = _getpass.getpass("Please enter your sudo password: ")
-        capmanager.resume_global_capture()
-    return PasswordManager(password=password)
-
-
 @_pytest.fixture(autouse=True)
-def patch_password_manager(password_manager, monkeypatch):
-    monkeypatch.setattr("tues._PM", password_manager)
+def patch_password_manager(monkeypatch, pytestconfig):
+    def _prompt(message):
+        capmanager = pytestconfig.pluginmanager.getplugin("capturemanager")
+        capmanager.suspend_global_capture(in_=True)
+        password = _getpass.getpass(message + ": ")
+        capmanager.resume_global_capture()
+        return password
+
+    monkeypatch.setattr("tues._PM._prompt", _prompt)
 
 
 def assert_output(actual_stdout, wanted_stdout, actual_stderr, wanted_stderr, pty=False, text=False, encoding="utf-8"):
