@@ -631,6 +631,16 @@ async def _redirect_io(session, stdout, stderr, sudo):
     await session.redirect(stdin=None, stdout=stdout, stderr=stderr or stdout)
 
 
+class TuesClient(_ssh.SSHClient):
+
+    def __init__(self, pm):
+        super().__init__()
+        self._pm = pm
+
+    def password_auth_requested(self):
+        return self._pm.get("Login password")
+
+
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
     """ The real "runner" function issued for every host """
     env = []
@@ -643,7 +653,13 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if run.connection is None:
         try:
             async with _timeout.timeout(10):
-                conn = await _ssh.connect(run.host, known_hosts=None, username=run.login_user, port=run.port or ())
+                conn = await _ssh.connect(
+                    run.host,
+                    known_hosts=None,
+                    username=run.login_user,
+                    port=run.port or (),
+                    client_factory=_ft.partial(TuesClient, pm),
+                )
         except Exception as e:
             raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
     else:
