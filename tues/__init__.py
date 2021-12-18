@@ -191,15 +191,17 @@ class Script:
 class PasswordManager:
 
     def __init__(self, prompt=None, password=None):
-        if prompt is None:
-            self._prompt = _ft.partial(_click.prompt, "Your remote sudo password", hide_input=True, err=True)
-        else:
+        if prompt is not None:
             self._prompt = prompt
         self._password = password if password else _os.environ.get("TUES_PW")
 
-    def get(self):
+    @staticmethod
+    def _prompt(message):
+        return _click.prompt(message, hide_input=True, err=True)
+
+    def get(self, message):
         if self._password is None:
-            self._password = self._prompt()
+            self._password = self._prompt(message)
 
         return self._password
 
@@ -513,7 +515,7 @@ class SudoWriter:
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
             self._waiting = True
-            password = self._pm.get()
+            password = self._pm.get("Your remote sudo password")
             _log.debug("SudoWriter prompt reply on %r", self.sudo)
             self.sudo.write((password + "\n").encode())
             await self.sudo.drain()
