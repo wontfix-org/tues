@@ -144,6 +144,7 @@ def cli(
                 ("pool_size", pool_size),
                 ("check", check),
                 ("output_dir_strategy", output_dir_strategy),
+                ("login_user", login_user),
             ]
 
             overrides = {
@@ -174,6 +175,7 @@ def cli(
                 preexec_fn=start_host,
                 postexec_fn=finish_host,
                 output_dir_strategy=output_dir_strategy,
+                login_user=login_user,
             )
     except _tues.TuesErrorGroup as e:
         _click.echo(e)
