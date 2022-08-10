@@ -21,6 +21,15 @@ import inspect as _inspect
 import tempfile as _tempfile
 import urllib.parse as _urlparse
 
+import warnings as _warnings
+import cryptography.utils as _crypto_utils
+
+_warnings.filterwarnings(
+    "ignore",
+    module=r"^asyncssh\..*",
+    category=_crypto_utils.CryptographyDeprecationWarning,
+)
+
 import click as _click
 import asyncssh as _ssh
 import async_timeout as _timeout

@@ -21,7 +21,14 @@ if __name__ == "__main__":
         platforms="any",
         long_description=open("README.md", encoding="utf-8").read(),
         long_description_content_type="text/markdown",
-        install_requires=["click", "asyncssh", "async-timeout", "requests>=2.4", "setuptools"],
+        install_requires=[
+            "click",
+            "asyncssh",
+            "async-timeout",
+            "requests>=2.4",
+            "setuptools",
+            "cryptography"
+        ],
         classifiers=[
             "Natural Language :: English",
             "Programming Language :: Python :: 3",
