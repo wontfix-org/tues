@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "tues"
+version = "2.4.0"
+description = "Easy remote command execution"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {file = "LICENSE.txt"}
+authors = [
+    {name = "Michael van Bracht", email = "michael@wontfix.org"},
+    {name = "Marc Schmitzer", email = "marc@solute.de"},
+    {name = "Roland Sommer", email = "ros@solute.de"},
+]
+keywords = ["ssh", "remote", "shell", "sudo"]
+
+dependencies = [
+    "click",
+    "asyncssh",
+    "async-timeout",
+    "requests>=2.4",
+    "setuptools",
+    "cryptography",
+]
+
+[project.urls]
+homepage = "https://github.com/wontfix-org/tues/"
+repository = "https://github.com/wontfix-org/tues/"
+
+[project.optional-dependencies]
+tests = ["pytest"]
+dev = ["build", "twine"]
+
+[tool.setuptools]
+packages = ["tues"]
+script-files = [
+    "scripts/tues",
+    "scripts/tues-provider-cl",
+    "scripts/tues-provider-file",
+    "scripts/tues-provider-fm",
+]
