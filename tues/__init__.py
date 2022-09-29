@@ -246,6 +246,7 @@ class Task:
         cwd=None,
         preexec_fn=None,
         postexec_fn=None,
+        universal_newlines=None,
     ): # pylint: disable=too-many-locals
         if encoding or errors:
             text = True
@@ -259,6 +260,9 @@ class Task:
 
         if pty and (input or stdin):
             raise TuesError("Passing `input` or `stdin` in `pty` mode is not supported")
+
+        if pty and universal_newlines is None:
+            universal_newlines = True
 
         # `asyncssh.connect` wants an empty tuple over `None` as default
         if login_user is None:
@@ -294,6 +298,7 @@ class Task:
         self.prefix_width_hint = prefix_width_hint or len(self.host)
         self.user = user
         self.pty = pty
+        self.universal_newlines = universal_newlines if pty else False
         self.input = input
         self.stdin = stdin
         self.text = text
@@ -485,17 +490,19 @@ class SudoWriter:
     # No idea why this token it not configurable in sudo, but since we are
     # making our own success token, we do not really need this, we only keep
     # it around so we are able to clean it from the datastream
-    FAILURE_TOKEN = b"Sorry, try again.\r\n"
 
     def __init__(self, f, run, pm, on_success=None):
         self._f = f
         self.sudo = None
         self._pm = pm
+        self.newline = b"\r\n" if run.universal_newlines else b"\n"
+        self.failure_token = b"Sorry, try again." + self.newline
         self._post_prompt_filter = (
             self.SUCCESS_TOKEN,
-            self.FAILURE_TOKEN,
-            b"\r\n",
+            self.failure_token,
+            self.newline,
         )
+
         self._run = run
         self._on_success = on_success
         self._waiting = False
@@ -503,9 +510,9 @@ class SudoWriter:
         run.cmdwrapper = lambda cmd: f"sudo -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
 
     async def write(self, data):
-        if self.FAILURE_TOKEN in data or self.SUCCESS_TOKEN in data:
+        if self.failure_token in data or self.SUCCESS_TOKEN in data:
             _log.debug("SudoWriter found stop token in %r", data)
-            if self.FAILURE_TOKEN in data:
+            if self.failure_token in data:
                 self._pm.invalidate()
 
             if self.SUCCESS_TOKEN in data:
@@ -735,6 +742,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             _ssh.SSHClientProcess,
             cmd,
             term_type=_os.environ.get("TERM"),
+            term_modes={_ssh.PTY_ONLCR: 0, _ssh.PTY_INLCR: 0} if not run.universal_newlines else (),
             request_pty=run.pty,
             env=env,
             # If we don't "force" them to None, some kind of autodetection will take place
@@ -871,6 +879,7 @@ def run(
     preexec_fn=None,
     postexec_fn=None,
     output_dir_strategy=DIR_IGNORE,
+    universal_newlines=None,
 ): # pylint: disable=too-many-locals
     """
         Run `cmd` on all `hosts`.
@@ -973,6 +982,11 @@ def run(
                 In this mode you will not be able to distinguish between stdout
                 and stderr, all output will seem to be coming from stdout.
 
+            universal_newlines (bool): When pty mode is enabled, \n will be automtically
+                converted to \r\n in either direction, even when dealing with bytes.
+                To prevent the pty layer from manipulating the bytestream, you can
+                set `universal_newlines` to `False`.
+
             login_user (str): The user to log-in with, usual system defaults
                 and ssh config settings apply, so you should only very rarely
                 need this option.
@@ -1008,6 +1022,7 @@ def run(
             prefix_width_hint=host_width if align_prefix else None,
             user=user,
             pty=pty,
+            universal_newlines=universal_newlines,
             input=input,
             text=text,
             errors=errors,
