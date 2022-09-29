@@ -794,7 +794,7 @@ async def _wait_with_concurrency(tasks, pool_size):
     async def sem_task(task):
         async with semaphore:
             return await task
-    return await _asyncio.wait([sem_task(task) for task in tasks])
+    return await _asyncio.wait([_asyncio.create_task(sem_task(task)) for task in tasks])
 
 
 async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pylint: disable=too-many-locals
@@ -1047,7 +1047,7 @@ def run(
         try:
             loop = _asyncio.get_running_loop()
         except RuntimeError:
-            loop = _asyncio.get_event_loop()
+            loop = _asyncio.new_event_loop()
 
     try:
         if pool_size > 1:
