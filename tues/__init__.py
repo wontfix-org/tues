@@ -188,9 +188,13 @@ class Script:
         run_kwargs["hosts"] = hosts
         run_kwargs.update({k:v for k, v in self.run_args.items() if k in whitelist})
 
+        ignore_cli = (
+            "files", # we use "files" to copy our script, so we need to merge instead or replace
+            "prefix", # if the script manages this value, it is unlikely to work with prefixes
+        )
 
         # Make sure we "upload ourself", so we can just run the script
-        run_kwargs.update({k:v for k, v in kwargs.items() if v is not None and k != "files"})
+        run_kwargs.update({k:v for k, v in kwargs.items() if v is not None and k not in ignore_cli})
         run_kwargs.setdefault("files", [])
         run_kwargs["files"].extend(kwargs.get("files", []))
         run_kwargs["files"].append(self.path)
