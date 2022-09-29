@@ -515,15 +515,17 @@ class SudoWriter:
         run.cmdwrapper = lambda cmd: f"sudo -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
 
     async def write(self, data):
-        if self.failure_token in data or self.SUCCESS_TOKEN in data:
+        failure_cond = self.failure_token in data
+        success_cond = self.SUCCESS_TOKEN in data
+        if failure_cond or success_cond:
             _log.debug("SudoWriter found stop token in %r", data)
-            if self.failure_token in data and self._last_pw_attempted == self._pm.get():
+            # Only invalidate if nobody else has reprompted a password yet
+            if failure_cond and self._last_pw_attempted == self._pm.get():
                 self._pm.invalidate()
 
-            if self.SUCCESS_TOKEN in data:
-                if self._on_success:
-                    await self._on_success()
-                    self._on_success = None
+            if success_cond and self._on_success:
+                await self._on_success()
+                self._on_success = None
 
         if self._waiting:
             for filter_ in self._post_prompt_filter:
