@@ -179,6 +179,7 @@ class Script:
             "pty",
             "input"
             "check",
+            "pool_size",
         ]
 
         if not hosts:
