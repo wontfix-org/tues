@@ -647,9 +647,9 @@ async def _redirect_io(session, stdout, stderr, sudo):
     if sudo and not isinstance(sudo, OutputWrapper):
         sudo = OutputWrapper(sudo)
 
-    _log.debug("STDOUT %r", stdout)
-    _log.debug("STDERR %r", stderr)
-    _log.debug("SUDO %r", sudo)
+    _log.debug("IO Handle for stdout set to %r", stdout)
+    _log.debug("IO Handle for stderr set to  %r", stderr)
+    _log.debug("IO Handle for sudo set  %r", sudo)
 
     await session.redirect(stdin=None, stdout=stdout, stderr=stderr or stdout)
 
