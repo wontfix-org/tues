@@ -213,8 +213,8 @@ class PasswordManager:
     def _prompt(message):
         return _click.prompt(message, hide_input=True, err=True)
 
-    def get(self, message):
-        if self._password is None:
+    def get(self, message=None):
+        if message and self._password is None:
             self._password = self._prompt(message)
 
         return self._password
@@ -517,7 +517,7 @@ class SudoWriter:
     async def write(self, data):
         if self.failure_token in data or self.SUCCESS_TOKEN in data:
             _log.debug("SudoWriter found stop token in %r", data)
-            if self.failure_token in data:
+            if self.failure_token in data and self._last_pw_attempted == self._pm.get():
                 self._pm.invalidate()
 
             if self.SUCCESS_TOKEN in data:
@@ -536,8 +536,8 @@ class SudoWriter:
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
             self._waiting = True
-            password = self._pm.get("Your remote sudo password")
             _log.debug("SudoWriter prompt reply on %r", self.sudo)
+            self._last_pw_attempted = password = self._pm.get("Your remote sudo password")
             self.sudo.write((password + "\n").encode())
             await self.sudo.drain()
 
