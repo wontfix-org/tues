@@ -17,6 +17,7 @@ import subprocess as _sp
 import locale as _locale
 import asyncio as _asyncio
 import logging as _logging
+import getpass as _getpass
 import inspect as _inspect
 import tempfile as _tempfile
 import urllib.parse as _urlparse
@@ -612,7 +613,20 @@ async def _prepare_io(run, stdout, stderr, env, pm, send_input):
 
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
-    if run.user:
+    config = _os.path.expanduser("~/.ssh/config")
+    if _os.path.exists(config):
+        config = _ssh.config.SSHClientConfig.load(
+            None,
+            config,
+            False,
+            _getpass.getuser(),
+            run.login_user,
+            run.host,
+            run.port,
+        )
+        run.login_user = config.get("User", run.login_user)
+
+    if run.user and run.user != run.login_user:
         def sudo_wrap(run, writer):
             return SudoWriter(writer, run, pm, send_input)
 
