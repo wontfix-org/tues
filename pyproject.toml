@@ -34,11 +34,11 @@ repository = "https://github.com/wontfix-org/tues/"
 test = ["pytest"]
 dev = ["build", "twine", "tox"]
 
+[project.scripts]
+tues = "tues.cli.tues:main"
+tues-provider-fm = "tues.cli.tues_provider_fm:main"
+tues-provider-cl = "tues.cli.tues_provider_cl:main"
+tues-provider-file = "tues.cli.tues_provider_file:main"
+
 [tool.setuptools]
 packages = ["tues"]
-script-files = [
-    "scripts/tues",
-    "scripts/tues-provider-cl",
-    "scripts/tues-provider-file",
-    "scripts/tues-provider-fm",
-]

@@ -189,5 +189,5 @@ def cli(
         raise _click.ClickException(str(e))
 
 
-if __name__ == "__main__":
+def main():
     cli() # pylint: disable=no-value-for-parameter

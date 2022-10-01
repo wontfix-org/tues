@@ -14,5 +14,5 @@ def cli(files):
                 _click.echo(line.strip())
 
 
-if __name__ == "__main__":
+def main():
     cli() # pylint: disable=no-value-for-parameter
