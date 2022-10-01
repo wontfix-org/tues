@@ -40,5 +40,5 @@ tues-provider-fm = "tues.cli.tues_provider_fm:main"
 tues-provider-cl = "tues.cli.tues_provider_cl:main"
 tues-provider-file = "tues.cli.tues_provider_file:main"
 
-[tool.setuptools]
-packages = ["tues"]
+[tool.setuptools.packages.find]
+where = ["src"]
