@@ -31,8 +31,8 @@ homepage = "https://github.com/wontfix-org/tues/"
 repository = "https://github.com/wontfix-org/tues/"
 
 [project.optional-dependencies]
-tests = ["pytest"]
-dev = ["build", "twine"]
+test = ["pytest"]
+dev = ["build", "twine", "tox"]
 
 [tool.setuptools]
 packages = ["tues"]
