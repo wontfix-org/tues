@@ -308,7 +308,7 @@ def test_tues_run_with_stderr_stdout(capsys, user):
     run = _tues.run("localhost", "echo -n out ; echo -n err >&2", stderr=_tues.STDOUT, text=True, user=user, check=True)
     captured = capsys.readouterr()
     assert run.stderr is None
-    assert captured.out == "outerr"
+    assert captured.out in ("outerr", "errout")
 
 
 @user_param
