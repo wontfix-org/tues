@@ -458,6 +458,7 @@ def test_output_dir_strategy_ignore(tmp_path):
     _tues.run("localhost", "id", output_dir=str(o), output_dir_strategy=_tues.DIR_IGNORE)
     assert (o / "localhost.log").exists() and (o / "foo.log").exists()
 
+
 def test_output_dir_strategy_wipe(tmp_path):
     o = (tmp_path / "output")
     o.mkdir()
