@@ -670,12 +670,13 @@ async def _redirect_io(session, stdout, stderr, sudo):
 
 class TuesClient(_ssh.SSHClient):
 
-    def __init__(self, pm):
+    def __init__(self, pm, host):
         super().__init__()
         self._pm = pm
+        self._host = host
 
     def password_auth_requested(self):
-        return self._pm.get("Login password")
+        return self._pm.get("Login password for {}".format(self._host))
 
 
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
@@ -695,7 +696,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
                     known_hosts=None,
                     username=run.login_user,
                     port=run.port or (),
-                    client_factory=_ft.partial(TuesClient, pm),
+                    client_factory=_ft.partial(TuesClient, pm, run.host),
                 )
         except Exception as e:
             raise TuesError(f"Could not connect to {run.host}: {e!r}") from e
