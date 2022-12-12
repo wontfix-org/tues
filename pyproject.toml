@@ -13,7 +13,7 @@ license = {file = "LICENSE.txt"}
 authors = [
     {name = "Michael van Bracht", email = "michael@wontfix.org"},
     {name = "Marc Schmitzer", email = "marc@solute.de"},
-    {name = "Roland Sommer", email = "ros@solute.de"},
+    {name = "Roland Sommer", email = "rol@ndsommer.de"},
 ]
 keywords = ["ssh", "remote", "shell", "sudo"]
 
