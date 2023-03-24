@@ -75,7 +75,7 @@ import sys
 
 import tues
 
-run = tues.run(
+runs = tues.run(
     ["localhost", "127.0.0.1", "::1"],
     "id",
     user="root",
