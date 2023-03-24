@@ -17,7 +17,7 @@ Run `id` on localhost as user root, using the IPv4/IPv6 adresses is not required
 The login user will be derived from your ssh configuration (or if you really need to, manually with the `--login-user`/`-l` switch), while the user specified by `-u` is the user to run the command as on the remote host.
 
 ```
-$ tues -u root id cl localhost 127.0.0.1 ::1
+$ tues -u root id cl localhost 127.0.0.1 [::1]
 [::1/stdout]: uid=0(root) gid=0(root) groups=0(root)
 [127.0.0.1/stdout]: uid=0(root) gid=0(root) groups=0(root)
 [localhost/stdout]: uid=0(root) gid=0(root) groups=0(root)
@@ -53,7 +53,7 @@ When running from python, tues will behave mostly the same, with slight differen
 import tues
 
 tues.run(
-    ["localhost", "127.0.0.1", "::1"],
+    ["localhost", "127.0.0.1", "[::1]"],
     "id",
     user="root",
     prefix=True,
@@ -76,7 +76,7 @@ import sys
 import tues
 
 runs = tues.run(
-    ["localhost", "127.0.0.1", "::1"],
+    ["localhost", "127.0.0.1", "[::1]"],
     "id",
     user="root",
     text=True,
