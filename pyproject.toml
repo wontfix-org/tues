@@ -16,7 +16,9 @@ authors = [
     {name = "Roland Sommer", email = "rol@ndsommer.de"},
 ]
 keywords = ["ssh", "remote", "shell", "sudo"]
-
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "click",
     "asyncssh",
