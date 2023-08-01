@@ -1025,6 +1025,8 @@ def run(
     """
     if isinstance(hosts, (str, tuple)):
         hosts = [hosts]
+    elif not hosts:
+        raise TuesError("No hosts")
 
     hosts = [Host(_) for _ in hosts]
 
