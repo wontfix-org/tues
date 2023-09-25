@@ -200,7 +200,8 @@ class Script:
         run_kwargs["files"].extend(kwargs.get("files", []))
         run_kwargs["files"].append(self.path)
 
-        return run(cmd="./" + self.cmd, **run_kwargs)
+        cmd = "chmod +x $TUES_FILE{} ; ./{}".format(len(run_kwargs["files"]), self.cmd)
+        return run(cmd=cmd, **run_kwargs)
 
 
 class PasswordManager:
