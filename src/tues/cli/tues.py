@@ -1,8 +1,43 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# pylint: disable=c-extension-no-member
+""" Run commands on multiple hosts
 
-from __future__ import print_function, absolute_import
+You must at least provide `CMD` to execute and a `PROVIDER` name to generate a list of
+hosts to run the command on.
+
+A provider is just another exucutable on your `PATH`, the script will be called with all
+`PROVDER_ARGS` and is expected to return a list of hostnames, one per line, on stdout.
+
+The most basic providers are `cl` (for commandline) and `file` to just return all host
+passed on the commandline or read them from a bunch of files.
+
+Commands can be run in parallel with the `-p` or `-n` switches. Every line is prefixed with
+the name of the host by default, if you need the raw output, use `-N` to drop the prefix.
+If using `-d <dir>` to redirect all output to create one file per host in `<dir>`, the
+prefix is dropped automatically. In non-parallel mode, the first command exiting != 0 will
+abort further execution, pass `--no-check` to always execute the command on all hosts.
+
+By default we login with your local user or whatever is configured in your SSH config for
+the host in question. The `-u/--user` option will trigger privilege elevation via sudo, which
+we try to make as painless as possible.
+
+In order to run pre-made scripts instead of some ad-hoc command, tues supports a script
+mode. When enabled with `-s`, the first element of `CMD` is expected to be a local script
+found in `TUES_PATH`, a shell variable working a bit like `PATH`. The script is discovered and
+copied to the remote host for execution and run with all additional arguments from `CMD` 
+
+Examples:
+
+    # Run id on localhost as yourself
+    tues "id -a" cl localhost
+
+    # Run the "id -a" command as root on localhost
+    tues -u root id cl localhost
+
+    # Create the default TUES_PATH directory and add a sample script to call
+    mkdir ~/.config/tues/scripts/
+    echo 'id "$@"' > ~/.config/tues/scripts/myid
+    tues -s "myid -a" cl localhost
+
+"""
 
 import os as _os
 import sys as _sys
@@ -24,7 +59,7 @@ def get_hosts(provider, args):
         _sys.exit(2)
 
 
-@_click.command(context_settings={"ignore_unknown_options": True, "auto_envvar_prefix": "TUES"})
+@_click.command(context_settings={"ignore_unknown_options": True, "auto_envvar_prefix": "TUES"}, help=__doc__)
 @_click.option("-u", "--user", help="The user to run the command as")
 @_click.option("-l", "--login-user", help="The user to login with")
 @_click.option("-n", "--pool-size", default=1, help="The number of concurrent tasks")
