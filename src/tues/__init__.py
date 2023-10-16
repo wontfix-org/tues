@@ -1079,7 +1079,7 @@ def run(
                 result = loop.run_until_complete(_run(task, pm, stdout, stderr))
                 if check and result.returncode > 0:
                     raise TuesTaskError(task)
-    except KeyboardInterrupt as e:
+    except KeyboardInterrupt:
         for task in tasks:
             task.cleanup()
 

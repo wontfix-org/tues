@@ -117,11 +117,7 @@ def cli(
     output_dir_strategy,
     universal_newlines,
 ): # pylint: disable=too-many-locals
-    if verbose is None:
-        if output_dir:
-            verbose = True
-        else:
-            verbose = False
+    verbose = bool(output_dir) if verbose is None else verbose
 
     if output_dir:
         prefix = False
@@ -154,22 +150,16 @@ def cli(
         if wait and hosts:
             last_host = hosts[-1]
 
-            def wait(func):
+            def _wait(func):
                 def _wait(task):
                     func(task)
                     if task.host != last_host:
                         _click.prompt("Press <ENTER> to continue", default="", show_default=False)
                 return _wait
 
-            finish_host = wait(finish_host)
+            finish_host = _wait(finish_host)
 
         if script:
-            def pick(name, value, default=None):
-                if ctx.get_parameter_source(name) == _click.core.ParameterSource.DEFAULT:
-                    return default
-                else:
-                    return value
-
             # This is list of settings that will "override" settings in a script file only
             # if they have been specified on the command line explicitly, we still prefer
             # the scripts value over the options default value
