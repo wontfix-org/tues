@@ -195,7 +195,7 @@ class Script:
         )
 
         # Make sure we "upload ourself", so we can just run the script
-        run_kwargs.update({k:v for k, v in kwargs.items() if v is not None and k not in ignore_cli})
+        run_kwargs.update({k:v for k, v in kwargs.items() if v is not None and (k not in ignore_cli or k not in self.run_args)})
         run_kwargs.setdefault("files", [])
         run_kwargs["files"].extend(kwargs.get("files", []))
         run_kwargs["files"].append(self.path)
