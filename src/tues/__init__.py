@@ -186,16 +186,25 @@ class Script:
         if not hosts:
             hosts = provider(self.provider, self.provider_args)
 
+        # Define `hosts` and set all kwargs extracted from the scripts `run-args`
         run_kwargs["hosts"] = hosts
         run_kwargs.update({k:v for k, v in self.run_args.items() if k in whitelist})
 
-        ignore_cli = (
-            "files", # we use "files" to copy our script, so we need to merge instead or replace
-            "prefix", # if the script manages this value, it is unlikely to work with prefixes
-        )
+        # Update "all" arguments passed at runtime
+        for k, v in kwargs.items():
+            # Handled explicitly down below
+            if k == "files":
+                continue
 
-        # Make sure we "upload ourself", so we can just run the script
-        run_kwargs.update({k:v for k, v in kwargs.items() if v is not None and (k not in ignore_cli or k not in self.run_args)})
+            # No explicit value requested, so depend on the defaults provided by lowlevel functions
+            # or values from run_args, either way, not much use in processing this value further
+            if v is None:
+                continue
+
+            run_kwargs[k] = v
+
+        # Make sure we "upload ourself", so we can just run the script but take care
+        # to include any manually specified files
         run_kwargs.setdefault("files", [])
         run_kwargs["files"].extend(kwargs.get("files", []))
         run_kwargs["files"].append(self.path)
