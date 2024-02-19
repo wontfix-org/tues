@@ -433,7 +433,7 @@ def test_script_parsing(tmp_path):
         and script.provider_args == ["localhost"]
     )
 
-    run = script.run(capture_output=True, text=True)
+    run = script.run(capture_output=True, text=True)[0]
     assert run.stdout == "foo"
 
 

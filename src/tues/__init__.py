@@ -1033,7 +1033,8 @@ def run(
                 is created and used internally, you don't need to `await` anything.
 
     """
-    if isinstance(hosts, (str, tuple)):
+    single = isinstance(hosts, (str, tuple))
+    if single:
         hosts = [hosts]
     elif not hosts:
         raise TuesError("No hosts")
@@ -1092,10 +1093,10 @@ def run(
         for task in tasks:
             task.cleanup()
 
-    if len(tasks) > 1:
-        return tasks
+    if single:
+        return tasks[0]
 
-    return tasks[0]
+    return tasks
 
 
 def _shlex_join(elems):
