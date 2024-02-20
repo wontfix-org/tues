@@ -169,6 +169,7 @@ def cli(
                 ("output_dir", output_dir),
                 ("pty", pty),
                 ("pool_size", pool_size),
+                ("prefix", prefix),
                 ("check", check),
                 ("output_dir_strategy", output_dir_strategy),
                 ("login_user", login_user),
@@ -182,7 +183,6 @@ def cli(
             script = _tues.Script(cmd, paths=path)
             script.run(
                 hosts,
-                prefix=prefix,
                 align_prefix=align_prefix,
                 preexec_fn=start_host,
                 postexec_fn=finish_host,
