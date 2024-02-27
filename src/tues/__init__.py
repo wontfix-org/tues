@@ -1071,11 +1071,13 @@ def run(
         ) for host in hosts
     ]
 
+    close_loop = False
     if loop is None:
         try:
             loop = _asyncio.get_running_loop()
         except RuntimeError:
             loop = _asyncio.new_event_loop()
+            close_loop = True
 
     try:
         if pool_size > 1:
@@ -1092,6 +1094,9 @@ def run(
     except KeyboardInterrupt:
         for task in tasks:
             task.cleanup()
+    finally:
+        if close_loop:
+            loop.close()
 
     if single:
         return tasks[0]
