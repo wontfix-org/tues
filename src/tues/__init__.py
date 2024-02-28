@@ -511,7 +511,7 @@ class SudoWriter:
         self._on_success = on_success
         self._waiting = False
         run.precmds.append(f"echo -n {self.SUCCESS_TOKEN.decode()} >&2")
-        run.cmdwrapper = lambda cmd: f"sudo -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
+        run.cmdwrapper = lambda cmd: f"sudo -H -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
 
     async def write(self, data):
         failure_cond = self.failure_token in data
