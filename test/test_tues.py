@@ -5,6 +5,8 @@ import io as _io
 import pwd as _pwd
 import getpass as _getpass
 import tempfile as _tempfile
+import time as _time
+import threading as _threading
 
 import tues as _tues
 
@@ -373,6 +375,31 @@ def test_tues_run_multi_host():
     assert ["test", "test"] == [_.stdout for _ in runs]
 
 
+@_pytest.mark.skipif(_os.environ.get("CI"), reason="Probably not stable")
+@_pytest.mark.parametrize("pool_size", [1, 2])
+def test_tues_run_cancel(pool_size):
+    def background():
+        _time.sleep(1)
+        _os.kill(0, 2)
+
+    thread = _threading.Thread(target=background)
+    thread.start()
+    with _pytest.raises(_tues.TuesError) as exc_info:
+        _tues.run(
+            ["localhost", "localhost"],
+            "sleep 5",
+            capture_output=True,
+            text=True,
+            pool_size=pool_size,
+        )
+    thread.join()
+
+    if pool_size > 1:
+        assert isinstance(exc_info.value, _tues.TuesErrorGroup)
+    else:
+        assert isinstance(exc_info.value, _tues.TuesTaskError)
+
+
 @user_param
 @pty_param
 @text_param
@@ -433,7 +460,7 @@ def test_script_parsing(tmp_path):
         and script.provider_args == ["localhost"]
     )
 
-    run = script.run(capture_output=True, text=True)
+    run = script.run(capture_output=True, text=True)[0]
     assert run.stdout == "foo"
 
 

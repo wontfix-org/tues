@@ -13,6 +13,7 @@ import shlex as _shlex
 import errno as _errno
 import traceback as _tb
 import functools as _ft
+import signal as _signal
 import subprocess as _sp
 import locale as _locale
 import asyncio as _asyncio
@@ -328,7 +329,6 @@ class Task:
         self._stderr = None
         self.preexec_fn = preexec_fn
         self.postexec_fn = postexec_fn
-        self._session = None
 
     @property
     def stdout(self):
@@ -358,18 +358,6 @@ class Task:
             precmds = f"{precmds} cd {_shlex.quote(self.cwd)} ; "
 
         return self.cmdwrapper(f"{precmds}{self.cmd}")
-
-    def cleanup(self):
-        if not self._session:
-            return
-
-        if not self.pty:
-            if self.user:
-                _log.warning("Cannot terminate remote command when running as another user without pty mode, this may lead to hanging processes on the remote server")
-            else:
-                self._session.terminate()
-        else:
-            self._session.stdin.write(b"\x03")
 
 
 class BufferedIO(_tempfile.SpooledTemporaryFile):
@@ -782,16 +770,17 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             encoding=None,
             errors=None,
         )
-        await _redirect_io(session, stdout, stderr, sudo)
-        if not sudo:
-            await send_input()
+        try:
+            await _redirect_io(session, stdout, stderr, sudo)
+            if not sudo:
+                await send_input()
 
-        # Since we won't receive the KeyboardInterrupt here, we need to store the
-        # session in a way that will allow us to call `task.session.terminate()`
-        # from a location that does see it.
-        run._session = session
-        completed = await session.wait()
-        run._session = None
+            completed = await session.wait()
+        except _asyncio.CancelledError:
+            session.terminate()
+            session.close()
+            await session.wait_closed()
+            raise
 
         run.returncode = completed.returncode
 
@@ -812,35 +801,92 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             cb()
 
 
-async def _wait_with_concurrency(tasks, pool_size):
-    """ Make sure we only run `pool_size` tasks at once """
-    semaphore = _asyncio.Semaphore(pool_size)
-
-    async def sem_task(task):
-        async with semaphore:
-            return await task
-    return await _asyncio.wait([_asyncio.create_task(sem_task(task)) for task in tasks])
-
-
 async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pylint: disable=too-many-locals
     """ Run `tasks` with `pool_size` """
-    tasks = (_run(_, pm, stdout, stderr) for _ in tasks)
+    loop = _asyncio.get_running_loop()
 
-    (_done, _pending) = await _wait_with_concurrency(tasks, pool_size)
-
+    to_do = iter(tasks)
+    atasks = []
+    running = set()
+    abort = False
     excs = []
     results = []
-    for d in _done:
-        exc = d.exception()
+
+    def sigint():
+        nonlocal abort
+        abort = True
+        for atask in running:
+            atask.cancel()
+
+    loop.add_signal_handler(_signal.SIGINT, sigint)
+
+    while not abort:
+        try:
+            while len(running) < pool_size:
+                task = next(to_do)
+                atask = loop.create_task(_run(task, pm, stdout, stderr))
+                atasks.append(atask)  # Collect asyncio task objects in order
+                running.add(atask)
+        except StopIteration:
+            break
+
+        done, _pending = await _asyncio.wait(running, return_when=_asyncio.FIRST_COMPLETED)
+        running.difference_update(done)
+
+    loop.remove_signal_handler(_signal.SIGINT)
+
+    if running:
+        done, _pending = await _asyncio.wait(running, return_when=_asyncio.ALL_COMPLETED)
+
+    for atask in atasks:
+        result, exc = _collect(atask)
         if exc:
             excs.append(exc)
         else:
-            results.append(d.result())
+            results.append(result)
 
     if excs:
         raise TuesErrorGroup("Errors encountered while running tasks with concurrency", excs, results)
 
     return results
+
+
+async def run_tasks_serial(tasks, pm=_PM, stdout=None, stderr=None, check=False): # pylint: disable=too-many-locals
+    loop = _asyncio.get_running_loop()
+
+    current = None
+    results = []
+
+    def sigint():
+        current.cancel()
+
+    loop.add_signal_handler(_signal.SIGINT, sigint)
+
+    try:
+        for task in tasks:
+            atask = loop.create_task(_run(task, pm, stdout, stderr))
+            current = atask
+            _done, _pending = await _asyncio.wait((atask,))
+
+            result, exc = _collect(atask)
+            if exc or (check and result.returncode > 0):
+                raise TuesTaskError(task)
+            results.append(result)
+    finally:
+        loop.remove_signal_handler(_signal.SIGINT)
+
+    return results
+
+
+def _collect(atask):
+    if atask.cancelled():
+        return None, _asyncio.CancelledError()
+
+    exc = atask.exception()
+    if exc:
+        return None, exc
+
+    return atask.result(), None
 
 
 def _prepare_output_dir(path, strategy):
@@ -1033,7 +1079,8 @@ def run(
                 is created and used internally, you don't need to `await` anything.
 
     """
-    if isinstance(hosts, (str, tuple)):
+    single = isinstance(hosts, (str, tuple))
+    if single:
         hosts = [hosts]
     elif not hosts:
         raise TuesError("No hosts")
@@ -1070,32 +1117,29 @@ def run(
         ) for host in hosts
     ]
 
+    close_loop = False
     if loop is None:
         try:
             loop = _asyncio.get_running_loop()
         except RuntimeError:
             loop = _asyncio.new_event_loop()
+            close_loop = True
 
     try:
         if pool_size > 1:
             if check:
                 raise TuesError("Aborting on errors is not supported when running with a pool size > 1")
-            result = loop.run_until_complete(
-                run_tasks(tasks, pm, stdout, stderr, pool_size),
-            )
+            loop.run_until_complete(run_tasks(tasks, pm, stdout, stderr, pool_size))
         else:
-            for task in tasks:
-                result = loop.run_until_complete(_run(task, pm, stdout, stderr))
-                if check and result.returncode > 0:
-                    raise TuesTaskError(task)
-    except KeyboardInterrupt:
-        for task in tasks:
-            task.cleanup()
+            loop.run_until_complete(run_tasks_serial(tasks, pm, stdout, stderr, check=check))
+    finally:
+        if close_loop:
+            loop.close()
 
-    if len(tasks) > 1:
-        return tasks
+    if single:
+        return tasks[0]
 
-    return tasks[0]
+    return tasks
 
 
 def _shlex_join(elems):
