@@ -676,7 +676,7 @@ class TuesClient(_ssh.SSHClient):
 
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
     """ The real "runner" function issued for every host """
-    env = []
+    env = {}
 
     # Either use an already existing connection on the `run` object
     # or make a new one from `.host` and `.login_user`, in the later
@@ -704,7 +704,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     for idx, f in enumerate(run.files, start=1):
         try:
             await _ssh.scp(f, (conn, "./"), preserve=True)
-            env.append(f"TUES_FILE{idx}=$PWD{_shlex.quote('/' + _os.path.basename(f))}")
+            env[f"TUES_FILE{idx}"] = f"$PWD/{_shlex.quote(_os.path.basename(f))}"
         except _ssh.sftp.SFTPFailure as e:
             raise TuesError(f"Could not upload {f} to {run.host}") from e
 
@@ -738,10 +738,10 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             pass
 
     if run.env:
-        env.extend(f"{k}={_shlex.quote(v)}" for k, v in run.env.items())
+        env.update((k, _shlex.quote(v)) for k, v in run.env.items())
 
     if env:
-        run.precmds.extend(env)
+        run.precmds.append("export " + " ".join(f"{k}={v}" for k, v in env.items()))
 
     stdout, stderr, sudo, cleanup = await _prepare_io(
         run,
@@ -763,7 +763,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             term_type=_os.environ.get("TERM"),
             term_modes={_ssh.PTY_ONLCR: 0, _ssh.PTY_INLCR: 0} if not run.universal_newlines else (),
             request_pty=run.pty,
-            env=env,
+            env=run.env,
             # If we don't "force" them to None, some kind of autodetection will take place
             # and we'll end up receiving `str` objects in some scenarios.
             encoding=None,

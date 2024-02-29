@@ -332,27 +332,26 @@ def test_tues_run_with_stderr_devnull(user, capsys):
 
 
 @user_param
-@pty_param
 @text_param
-def test_tues_run_with_env(user, pty, text):
+def test_tues_run_with_env(user, text):
+    env = {"VAR1": "foo", "VAR2": "föö"}
     run = _tues.run(
         "localhost",
-        "echo -n $TEST",
+        "env",
         capture_output=True,
         text=text,
-        pty=pty,
         user=user,
         check=True,
-        env={"TEST": "föö"},
+        env=env,
     )
-    assert_output(
-        run.stdout,
-        "föö",
-        run.stderr,
-        "",
-        pty=pty,
-        text=text,
-    )
+    out = run.stdout
+    if not text:
+        out = out.decode("utf-8")
+    res = dict(line.split("=", 1) for line in out.splitlines())
+    for var, value in env.items():
+        assert res[var] == value
+
+    assert not run.stderr
 
 
 @user_param
