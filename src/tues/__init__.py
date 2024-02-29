@@ -349,15 +349,11 @@ class Task:
         return self._stderr.getvalue()
 
     def build_cmd(self):
-        if self.precmds:
-            precmds = " ; ".join(self.precmds) + " ; "
-        else:
-            precmds = ""
-
+        parts = list(self.precmds)
         if self.cwd:
-            precmds = f"{precmds} cd {_shlex.quote(self.cwd)} ; "
-
-        return self.cmdwrapper(f"{precmds}{self.cmd}")
+            parts.append(f"cd {_shlex.quote(self.cwd)}")
+        parts.append(self.cmd)
+        return self.cmdwrapper(" ; ".join(parts))
 
 
 class BufferedIO(_tempfile.SpooledTemporaryFile):
