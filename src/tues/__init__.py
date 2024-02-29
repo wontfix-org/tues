@@ -550,7 +550,7 @@ class SudoWriter:
             return await self._f.write(data)
 
 
-async def _prepare_io(run, stdout, stderr, env, pm, send_input):
+async def _prepare_io(run, stdout, stderr, pm, send_input):
     """ Setup IO for `run`
 
         Handle `run.outfile` as well as shared `stderr` und `stdout` handles, if set.
@@ -560,9 +560,6 @@ async def _prepare_io(run, stdout, stderr, env, pm, send_input):
     # pylint: disable=too-many-branches
     sudo = None
     cleanup = []
-
-    if env:
-        run.precmds.extend(env)
 
     if run.outfile:
         stdout = open(run.outfile, "wb")
@@ -743,11 +740,13 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if run.env:
         env.extend(f"{k}={_shlex.quote(v)}" for k, v in run.env.items())
 
+    if env:
+        run.precmds.extend(env)
+
     stdout, stderr, sudo, cleanup = await _prepare_io(
         run,
         stdout,
         stderr,
-        env,
         pm,
         send_input,
     )
