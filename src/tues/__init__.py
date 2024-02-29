@@ -373,8 +373,8 @@ class BufferedIO(_tempfile.SpooledTemporaryFile):
         super().__init__(*args, **kwargs)
 
     def getvalue(self):
+        pos = self.tell()
         try:
-            pos = self.tell()
             self.seek(0)
             return self.read()
         finally:
