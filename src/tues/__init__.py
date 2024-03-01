@@ -506,6 +506,7 @@ class SudoWriter:
         self._run = run
         self._on_success = on_success
         self._waiting = False
+        self._last_pw_attempted = None
         run.precmds.append(f"echo -n {self.SUCCESS_TOKEN.decode()} >&2")
         run.cmdwrapper = lambda cmd: f"sudo -H -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
 
