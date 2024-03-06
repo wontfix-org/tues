@@ -415,32 +415,6 @@ class PrefixWriter:
         return await self._f.write(data)
 
 
-class OutputWrapper:
-    """ Toplevel wrapper for our output handlers
-
-        This wrapper serves two purposes:
-
-          * Log the "original" writes, so we can easily debug problems in output handling
-          * Drop calls to `close`, asyncssh will close files we pass it for stdout/stderr
-            but we do not really want those to be closed, because we pass in sys.stdxxx as
-            well as files created from the `tempfile` module we can't really open again.
-    """
-
-    def __init__(self, f):
-        self._f = f
-
-    async def write(self, data):
-        try:
-            _log.debug("OutputWrapper %r.write(%r)", self._f, data)
-            return await self._f.write(data)
-        except Exception:
-            _log.error("Error during %r.write(%r)", self._f, data, exc_info=True)
-            raise
-
-    async def close(self):
-        pass
-
-
 class OutputWriter:
     """ Write output to its final destination
 
@@ -639,24 +613,6 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
     return (stdout, stderr, sudo, cleanup)
 
 
-async def _redirect_io(session, stdout, stderr):
-    """ Setup IO redirection on `session`
-
-        Ensure we at least wrap the files in an `OutputWrapper` so the files
-        don't get automatically closed by asyncssh.
-    """
-    if stdout:
-        stdout = OutputWrapper(stdout)
-
-    if stderr:
-        stderr = OutputWrapper(stderr)
-
-    _log.debug("IO Handle for stdout set to %r", stdout)
-    _log.debug("IO Handle for stderr set to  %r", stderr)
-
-    await session.redirect(stdin=None, stdout=stdout, stderr=stderr or stdout)
-
-
 class TuesClient(_ssh.SSHClient):
 
     def __init__(self, pm, host):
@@ -768,7 +724,8 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
                 send_input,
             )
 
-            await _redirect_io(session, stdout, stderr)
+            await session.redirect(stdout=stdout, stderr=stderr, recv_eof=False)
+
             if sudo:
                 sudo.sudo = session.stdin
             else:
