@@ -521,8 +521,7 @@ class SudoWriter:
 
         if self._waiting:
             for filter_ in self._post_prompt_filter:
-                if data.startswith(filter_):
-                    data = data[len(filter_):]
+                data = data.removeprefix(filter_)
 
         if not self._on_success:
             self._waiting = False
