@@ -307,7 +307,6 @@ class Task:
         self.connection = connection
         self.cmd = cmd
         self.precmds = []
-        self.cmdwrapper = lambda x: x
         self.login_user = login_user
         self.files = files
         self.outfile = outfile
@@ -353,7 +352,7 @@ class Task:
         if self.cwd:
             parts.append(f"cd {_shlex.quote(self.cwd)}")
         parts.append(self.cmd)
-        return self.cmdwrapper(" ; ".join(parts))
+        return " ; ".join(parts)
 
 
 class BufferedIO(_tempfile.SpooledTemporaryFile):
@@ -474,14 +473,13 @@ class OutputWriter:
 
 
 class SudoWriter:
-    """ Handle running `run` via sudo
+    """ Handle `sudo` interaction on an output stream
 
-        This consists of two parts, first wrapping `run.cmd` in a call to sudo,
-        as well as intercepting all IO, looking for "sudo output", prompting for
-        a password if necessary, sending the password input to stdin of the
-        remote process, and finally run the `on_success` callback that is usually
-        responsible for sending the held back input to the wrapped programm which
-        can only be sent once we are past the prompt.
+        Looks for "sudo output", prompts for a password if necessary and
+        injects the password into the output stream. If authentication
+        succeeds, the `on_success` async callback is invoked. The callback
+        is usually responsible for sending the held back input to the wrapped
+        programm which can only be sent once we are past the prompt.
     """
 
     # pylint: disable=too-many-instance-attributes
@@ -491,11 +489,11 @@ class SudoWriter:
     # making our own success token, we do not really need this, we only keep
     # it around so we are able to clean it from the datastream
 
-    def __init__(self, f, run, pm, on_success=None):
+    def __init__(self, f, universal_newlines, pm, on_success=None):
         self._f = f
         self.sudo = None
         self._pm = pm
-        self.newline = b"\r\n" if run.universal_newlines else b"\n"
+        self.newline = b"\r\n" if universal_newlines else b"\n"
         self.failure_token = b"Sorry, try again." + self.newline
         self._post_prompt_filter = (
             self.SUCCESS_TOKEN,
@@ -503,12 +501,19 @@ class SudoWriter:
             self.newline,
         )
 
-        self._run = run
         self._on_success = on_success
         self._waiting = False
         self._last_pw_attempted = None
-        run.precmds.append(f"echo -n {self.SUCCESS_TOKEN.decode()} >&2")
-        run.cmdwrapper = lambda cmd: f"sudo -H -S -u {_shlex.quote(run.user)} -p {_shlex.quote(self.PROMPT_TOKEN.decode())} -- bash -c {_shlex.quote(cmd)}"
+
+    @classmethod
+    def wrap_cmd(cls, run, cmd):
+        cmd = f"echo -n {cls.SUCCESS_TOKEN.decode()} >&2 ; {cmd}"
+        return " ".join([
+            "sudo -H -S",
+            "-u", _shlex.quote(run.user),
+            "-p", _shlex.quote(cls.PROMPT_TOKEN.decode()),
+            "--", "bash", "-c", _shlex.quote(cmd),
+        ])
 
     async def write(self, data):
         # Only invalidate if nobody else has reprompted a password yet
@@ -617,7 +622,7 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
     # to intercept the password prompt
     if run.user and run.user != run.login_user:
         def sudo_wrap(run, writer):
-            return SudoWriter(writer, run, pm, send_input)
+            return SudoWriter(writer, run.universal_newlines, pm, send_input)
 
         if stderr:
             stderr = sudo_wrap(run, stderr)
@@ -752,6 +757,8 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             run.preexec_fn(run)
 
         cmd = run.build_cmd()
+        if sudo:
+            cmd = SudoWriter.wrap_cmd(run, cmd)
         _log.debug("Running %r", cmd)
         _chan, session = await conn.create_session(
             _ssh.SSHClientProcess,
