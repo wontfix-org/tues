@@ -468,9 +468,9 @@ class SudoWriter:
     # making our own success token, we do not really need this, we only keep
     # it around so we are able to clean it from the datastream
 
-    def __init__(self, f, universal_newlines, pm, on_success=None):
+    def __init__(self, f, back_channel, universal_newlines, pm, on_success=None):
         self._f = f
-        self.sudo = None
+        self._back_channel = back_channel
         self._pm = pm
         self.newline = b"\r\n" if universal_newlines else b"\n"
         self.failure_token = b"Sorry, try again." + self.newline
@@ -513,10 +513,10 @@ class SudoWriter:
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
             self._waiting = True
-            _log.debug("SudoWriter prompt reply on %r", self.sudo)
+            _log.debug("SudoWriter prompt reply on %r", self._back_channel)
             self._last_pw_attempted = password = self._pm.get("Your remote sudo password")
-            self.sudo.write((password + "\n").encode())
-            await self.sudo.drain()
+            self._back_channel.write((password + "\n").encode())
+            await self._back_channel.drain()
 
         # In the best case scenario, the password prompt is detected
         # and removed from the output, leaving only an empty bytes
@@ -599,12 +599,12 @@ def _prepare_io(run, stdout, stderr):
     return stdout, stderr, cleanup
 
 
-def _prepare_sudo(run, stdout, stderr, pm, send_input):
+def _prepare_sudo(run, session, stdout, stderr, pm, send_input):
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
     if run.sudo:
         def sudo_wrap(run, writer):
-            return SudoWriter(writer, run.universal_newlines, pm, send_input)
+            return SudoWriter(writer, session.stdin, run.universal_newlines, pm, send_input)
 
         if stderr:
             stderr = sudo_wrap(run, stderr)
@@ -722,13 +722,11 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
         )
         try:
             stdout, stderr, cleanup = _prepare_io(run, stdout, stderr)
-            stdout, stderr, sudo = _prepare_sudo(run, stdout, stderr, pm, send_input)
+            stdout, stderr, sudo = _prepare_sudo(run, session, stdout, stderr, pm, send_input)
 
             await session.redirect(stdout=stdout, stderr=stderr, recv_eof=False)
 
-            if sudo:
-                sudo.sudo = session.stdin
-            else:
+            if not sudo:
                 await send_input()
 
             completed = await session.wait()
