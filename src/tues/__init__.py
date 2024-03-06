@@ -541,7 +541,7 @@ def _prepare_user(run):
         run.login_user = config.get("User", run.login_user)
 
 
-def _prepare_io(run, stdout, stderr, pm, send_input):
+def _prepare_io(run, stdout, stderr):
     """ Setup IO for `run`
 
         Handle `run.outfile` as well as shared `stderr` und `stdout` handles, if set.
@@ -549,7 +549,6 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
         wrappers are added if necessary.
     """
     # pylint: disable=too-many-branches
-    sudo = None
     cleanup = []
 
     if run.outfile:
@@ -597,6 +596,10 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
 
         stdout = PrefixWriter(stdout, outfmt if run.prefix else None)
 
+    return stdout, stderr, cleanup
+
+
+def _prepare_sudo(run, stdout, stderr, pm, send_input):
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
     if run.sudo:
@@ -609,8 +612,10 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
         else:
             stdout = sudo_wrap(run, stdout)
             sudo = stdout
+    else:
+        sudo = None
 
-    return (stdout, stderr, sudo, cleanup)
+    return stdout, stderr, sudo
 
 
 class TuesClient(_ssh.SSHClient):
@@ -716,13 +721,8 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             errors=None,
         )
         try:
-            stdout, stderr, sudo, cleanup = _prepare_io(
-                run,
-                stdout,
-                stderr,
-                pm,
-                send_input,
-            )
+            stdout, stderr, cleanup = _prepare_io(run, stdout, stderr)
+            stdout, stderr, sudo = _prepare_sudo(run, stdout, stderr, pm, send_input)
 
             await session.redirect(stdout=stdout, stderr=stderr, recv_eof=False)
 
