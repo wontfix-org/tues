@@ -557,7 +557,7 @@ def _prepare_user(run):
         run.login_user = config.get("User", run.login_user)
 
 
-async def _prepare_io(run, stdout, stderr, pm, send_input):
+def _prepare_io(run, stdout, stderr, pm, send_input):
     """ Setup IO for `run`
 
         Handle `run.outfile` as well as shared `stderr` und `stdout` handles, if set.
@@ -739,7 +739,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if env:
         run.precmds.append("export " + " ".join(f"{k}={v}" for k, v in env.items()))
 
-    stdout, stderr, sudo, cleanup = await _prepare_io(
+    stdout, stderr, sudo, cleanup = _prepare_io(
         run,
         stdout,
         stderr,
