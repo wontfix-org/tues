@@ -542,6 +542,21 @@ class SudoWriter:
             return await self._f.write(data)
 
 
+def _prepare_user(run):
+    config = _os.path.expanduser("~/.ssh/config")
+    if _os.path.exists(config):
+        config = _ssh.config.SSHClientConfig.load(
+            None,
+            config,
+            False,
+            _getpass.getuser(),
+            run.login_user,
+            run.host,
+            run.port,
+        )
+        run.login_user = config.get("User", run.login_user)
+
+
 async def _prepare_io(run, stdout, stderr, pm, send_input):
     """ Setup IO for `run`
 
@@ -600,19 +615,6 @@ async def _prepare_io(run, stdout, stderr, pm, send_input):
 
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
-    config = _os.path.expanduser("~/.ssh/config")
-    if _os.path.exists(config):
-        config = _ssh.config.SSHClientConfig.load(
-            None,
-            config,
-            False,
-            _getpass.getuser(),
-            run.login_user,
-            run.host,
-            run.port,
-        )
-        run.login_user = config.get("User", run.login_user)
-
     if run.user and run.user != run.login_user:
         def sudo_wrap(run, writer):
             return SudoWriter(writer, run, pm, send_input)
@@ -669,6 +671,8 @@ class TuesClient(_ssh.SSHClient):
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
     """ The real "runner" function issued for every host """
     env = {}
+
+    _prepare_user(run)
 
     # Either use an already existing connection on the `run` object
     # or make a new one from `.host` and `.login_user`, in the later
