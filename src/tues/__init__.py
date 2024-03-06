@@ -749,14 +749,6 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if env:
         run.precmds.append("export " + " ".join(f"{k}={v}" for k, v in env.items()))
 
-    stdout, stderr, sudo, cleanup = _prepare_io(
-        run,
-        stdout,
-        stderr,
-        pm,
-        send_input,
-    )
-
     try:
         if run.preexec_fn:
             run.preexec_fn(run)
@@ -778,6 +770,14 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             errors=None,
         )
         try:
+            stdout, stderr, sudo, cleanup = _prepare_io(
+                run,
+                stdout,
+                stderr,
+                pm,
+                send_input,
+            )
+
             await _redirect_io(session, stdout, stderr, sudo)
             if not sudo:
                 await send_input()
