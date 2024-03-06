@@ -330,6 +330,11 @@ class Task:
         self.postexec_fn = postexec_fn
 
     @property
+    def sudo(self):
+        """Whether the task requires use of `sudo`"""
+        return self.user is not None and self.user != self.login_user
+
+    @property
     def stdout(self):
         if not self._stdout:
             return None
@@ -620,7 +625,7 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
 
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
-    if run.user and run.user != run.login_user:
+    if run.sudo:
         def sudo_wrap(run, writer):
             return SudoWriter(writer, run.universal_newlines, pm, send_input)
 
@@ -757,7 +762,7 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             run.preexec_fn(run)
 
         cmd = run.build_cmd()
-        if sudo:
+        if run.sudo:
             cmd = SudoWriter.wrap_cmd(run, cmd)
         _log.debug("Running %r", cmd)
         _chan, session = await conn.create_session(
