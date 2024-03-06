@@ -8,7 +8,7 @@ name = "tues"
 version = "3.0.0"
 description = "Easy remote command execution"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 license = {file = "LICENSE.txt"}
 authors = [
     {name = "Michael van Bracht", email = "michael@wontfix.org"},
