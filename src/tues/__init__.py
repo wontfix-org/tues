@@ -639,18 +639,12 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
     return (stdout, stderr, sudo, cleanup)
 
 
-async def _redirect_io(session, stdout, stderr, sudo):
+async def _redirect_io(session, stdout, stderr):
     """ Setup IO redirection on `session`
 
         Ensure we at least wrap the files in an `OutputWrapper` so the files
         don't get automatically closed by asyncssh.
     """
-    if sudo:
-        _log.debug("SUDO TO %r", session.stdin)
-        #await session.redirect(stdin=_ssh.PIPE, stdout=None, stderr=None)
-        sudo.sudo = session.stdin # pylint: disable=attribute-defined-outside-init
-        #_log.debug("SUDO TO %r", session.stdin)
-
     if stdout:
         stdout = OutputWrapper(stdout)
 
@@ -774,8 +768,10 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
                 send_input,
             )
 
-            await _redirect_io(session, stdout, stderr, sudo)
-            if not sudo:
+            await _redirect_io(session, stdout, stderr)
+            if sudo:
+                sudo.sudo = session.stdin
+            else:
                 await send_input()
 
             completed = await session.wait()
