@@ -494,9 +494,9 @@ class SudoWriter:
     # making our own success token, we do not really need this, we only keep
     # it around so we are able to clean it from the datastream
 
-    def __init__(self, f, universal_newlines, pm, on_success=None):
+    def __init__(self, f, back_channel, universal_newlines, pm, on_success=None):
         self._f = f
-        self.sudo = None
+        self._back_channel = back_channel
         self._pm = pm
         self.newline = b"\r\n" if universal_newlines else b"\n"
         self.failure_token = b"Sorry, try again." + self.newline
@@ -539,10 +539,10 @@ class SudoWriter:
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
             self._waiting = True
-            _log.debug("SudoWriter prompt reply on %r", self.sudo)
+            _log.debug("SudoWriter prompt reply on %r", self._back_channel)
             self._last_pw_attempted = password = self._pm.get("Your remote sudo password")
-            self.sudo.write((password + "\n").encode())
-            await self.sudo.drain()
+            self._back_channel.write((password + "\n").encode())
+            await self._back_channel.drain()
 
         # In the best case scenario, the password prompt is detected
         # and removed from the output, leaving only an empty bytes
@@ -567,7 +567,7 @@ def _prepare_user(run):
         run.login_user = config.get("User", run.login_user)
 
 
-def _prepare_io(run, stdout, stderr, pm, send_input):
+def _prepare_io(run, stdout, stderr):
     """ Setup IO for `run`
 
         Handle `run.outfile` as well as shared `stderr` und `stdout` handles, if set.
@@ -575,7 +575,6 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
         wrappers are added if necessary.
     """
     # pylint: disable=too-many-branches
-    sudo = None
     cleanup = []
 
     if run.outfile:
@@ -623,11 +622,15 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
 
         stdout = PrefixWriter(stdout, outfmt if run.prefix else None)
 
+    return stdout, stderr, cleanup
+
+
+def _prepare_sudo(run, session, stdout, stderr, pm, send_input):
     # If running as another user is requested, bind to the appropriate stream
     # to intercept the password prompt
     if run.sudo:
         def sudo_wrap(run, writer):
-            return SudoWriter(writer, run.universal_newlines, pm, send_input)
+            return SudoWriter(writer, session.stdin, run.universal_newlines, pm, send_input)
 
         if stderr:
             stderr = sudo_wrap(run, stderr)
@@ -635,34 +638,26 @@ def _prepare_io(run, stdout, stderr, pm, send_input):
         else:
             stdout = sudo_wrap(run, stdout)
             sudo = stdout
+    else:
+        sudo = None
 
-    return (stdout, stderr, sudo, cleanup)
+    return stdout, stderr, sudo
 
 
-async def _redirect_io(session, stdout, stderr, sudo):
+async def _redirect_io(session, stdout, stderr):
     """ Setup IO redirection on `session`
 
         Ensure we at least wrap the files in an `OutputWrapper` so the files
         don't get automatically closed by asyncssh.
     """
-    if sudo:
-        _log.debug("SUDO TO %r", session.stdin)
-        #await session.redirect(stdin=_ssh.PIPE, stdout=None, stderr=None)
-        sudo.sudo = session.stdin # pylint: disable=attribute-defined-outside-init
-        #_log.debug("SUDO TO %r", session.stdin)
-
     if stdout:
         stdout = OutputWrapper(stdout)
 
     if stderr:
         stderr = OutputWrapper(stderr)
 
-    if sudo and not isinstance(sudo, OutputWrapper):
-        sudo = OutputWrapper(sudo)
-
     _log.debug("IO Handle for stdout set to %r", stdout)
     _log.debug("IO Handle for stderr set to  %r", stderr)
-    _log.debug("IO Handle for sudo set  %r", sudo)
 
     await session.redirect(stdin=None, stdout=stdout, stderr=stderr or stdout)
 
@@ -749,14 +744,6 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     if env:
         run.precmds.append("export " + " ".join(f"{k}={v}" for k, v in env.items()))
 
-    stdout, stderr, sudo, cleanup = _prepare_io(
-        run,
-        stdout,
-        stderr,
-        pm,
-        send_input,
-    )
-
     try:
         if run.preexec_fn:
             run.preexec_fn(run)
@@ -778,7 +765,10 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
             errors=None,
         )
         try:
-            await _redirect_io(session, stdout, stderr, sudo)
+            stdout, stderr, cleanup = _prepare_io(run, stdout, stderr)
+            stdout, stderr, sudo = _prepare_sudo(run, session, stdout, stderr, pm, send_input)
+
+            await _redirect_io(session, stdout, stderr)
             if not sudo:
                 await send_input()
 
