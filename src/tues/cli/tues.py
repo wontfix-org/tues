@@ -22,7 +22,7 @@ we try to make as painless as possible.
 In order to run pre-made scripts instead of some ad-hoc command, tues supports a script
 mode. When enabled with `-s`, the first element of `CMD` is expected to be a local script
 found in `TUES_PATH`, a shell variable working a bit like `PATH`. The script is discovered and
-copied to the remote host for execution and run with all additional arguments from `CMD` 
+copied to the remote host for execution and run with all additional arguments from `CMD`
 
 Examples:
 
@@ -88,7 +88,7 @@ def get_hosts(provider, args):
     multiple=True,
     default=[],
     type=_click.Path(readable=True),
-    help="File(s) to copy to the remove server. Paths are available on the remote as $TUES_FILE1 etc.",
+    help="File(s) to copy to the remote server. Paths are available on the remote as $TUES_FILE1 etc.",
 )
 @_click.option("--path", "path", multiple=True, type=_click.Path(), default=_tues.DEFAULT_PATH)
 @_click.argument("cmd", nargs=1, type=str)
