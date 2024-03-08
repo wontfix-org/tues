@@ -21,6 +21,7 @@ import logging as _logging
 import getpass as _getpass
 import inspect as _inspect
 import tempfile as _tempfile
+import contextlib as _ctxlib
 import urllib.parse as _urlparse
 
 import warnings as _warnings
@@ -92,6 +93,10 @@ class TuesScriptNotFoundError(TuesError):
 
 class TuesOutputDirExists(TuesError):
     pass
+
+
+class TuesUserAbort(TuesError):
+    """Raised when operation was aborted by the user"""
 
 
 class TuesTaskError(TuesError):
@@ -223,16 +228,41 @@ class PasswordManager:
 
     @staticmethod
     def _prompt(message):
-        return _click.prompt(message, hide_input=True, err=True)
+        try:
+            return _click.prompt(message, hide_input=True, err=True)
+        except _click.exceptions.Abort:
+            return None
 
     def get(self, message=None):
         if message and self._password is None:
-            self._password = self._prompt(message)
+            with _suspend_sigint_handler():
+                try:
+                    self._password = self._prompt(message)
+                except KeyboardInterrupt:
+                    self._password = None
 
         return self._password
 
     def invalidate(self):
         self._password = None
+
+
+@_ctxlib.contextmanager
+def _suspend_sigint_handler():
+    """Temporarily restore regular SIGINT handling
+
+    We normally handle SIGINT through a handler registered on the event loop that gets run as an
+    asyncio callback. Within this context manager, regular SIGINT handling is restored so that
+    pressing Ctrl+C raises `KeyboardInterrupt` within the currently-running function (on the main
+    thread).
+    """
+    orig_handler = _signal.signal(_signal.SIGINT, _signal.default_int_handler)
+    orig_fd = _signal.set_wakeup_fd(-1)
+    try:
+        yield
+    finally:
+        _signal.set_wakeup_fd(orig_fd)
+        _signal.signal(_signal.SIGINT, orig_handler)
 
 
 _PM = PasswordManager()
@@ -328,6 +358,7 @@ class Task:
         self._stderr = None
         self.preexec_fn = preexec_fn
         self.postexec_fn = postexec_fn
+        self.authorization_failed = False
 
     @property
     def sudo(self):
@@ -480,6 +511,7 @@ class SudoWriter:
             self.newline,
         )
 
+        self.authorization_failed = False
         self._on_success = on_success
         self._waiting = False
         self._last_pw_attempted = None
@@ -513,8 +545,15 @@ class SudoWriter:
         if self.PROMPT_TOKEN in data:
             data = data.replace(self.PROMPT_TOKEN, b"")
             self._waiting = True
+
+            password = self._pm.get("Your remote sudo password")
+            if password is None:
+                self.authorization_failed = True
+                self._back_channel.close()  # Terminates the remote process.
+                return 0
+
             _log.debug("SudoWriter prompt reply on %r", self._back_channel)
-            self._last_pw_attempted = password = self._pm.get("Your remote sudo password")
+            self._last_pw_attempted = password
             self._back_channel.write((password + "\n").encode())
             await self._back_channel.drain()
 
@@ -729,11 +768,15 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
                 await send_input()
 
             completed = await session.wait()
+
         except _asyncio.CancelledError:
             session.terminate()
             session.close()
             await session.wait_closed()
             raise
+
+        if sudo:
+            run.authorization_failed = sudo.authorization_failed
 
         run.returncode = completed.returncode
 
@@ -792,11 +835,14 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
         done, _pending = await _asyncio.wait(running, return_when=_asyncio.ALL_COMPLETED)
 
     for atask in atasks:
-        result, exc = _collect(atask)
+        task, exc = _collect(atask)
+
         if exc:
             excs.append(exc)
+        elif task.authorization_failed:
+            raise TuesUserAbort("Sudo authorization failed")
         else:
-            results.append(result)
+            results.append(task)
 
     if excs:
         raise TuesErrorGroup("Errors encountered while running tasks with concurrency", excs, results)
@@ -822,6 +868,8 @@ async def run_tasks_serial(tasks, pm=_PM, stdout=None, stderr=None, check=False)
             _done, _pending = await _asyncio.wait((atask,))
 
             result, exc = _collect(atask)
+            if task.authorization_failed:
+                raise TuesUserAbort("Sudo authorization failed")
             if exc or (check and result.returncode > 0):
                 raise TuesTaskError(task)
             results.append(result)
