@@ -800,8 +800,6 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
 
 async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pylint: disable=too-many-locals
     """ Run `tasks` with `pool_size` """
-    loop = _asyncio.get_running_loop()
-
     to_do = iter(tasks)
     atasks = []
     running = set()
@@ -809,31 +807,27 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
     excs = []
     results = []
 
-    def sigint():
-        nonlocal abort
-        abort = True
-        for atask in running:
-            atask.cancel()
+    try:
+        while not abort:
+            try:
+                while len(running) < pool_size:
+                    task = next(to_do)
+                    atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
+                    atasks.append(atask)  # Collect asyncio task objects in order
+                    running.add(atask)
+            except StopIteration:
+                break
 
-    loop.add_signal_handler(_signal.SIGINT, sigint)
+            done, _pending = await _asyncio.wait(running, return_when=_asyncio.FIRST_COMPLETED)
+            running.difference_update(done)
 
-    while not abort:
-        try:
-            while len(running) < pool_size:
-                task = next(to_do)
-                atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
-                atasks.append(atask)  # Collect asyncio task objects in order
-                running.add(atask)
-        except StopIteration:
-            break
-
-        done, _pending = await _asyncio.wait(running, return_when=_asyncio.FIRST_COMPLETED)
-        running.difference_update(done)
-
-    loop.remove_signal_handler(_signal.SIGINT)
-
-    if running:
-        done, _pending = await _asyncio.wait(running, return_when=_asyncio.ALL_COMPLETED)
+        if running:
+            done, _pending = await _asyncio.wait(running, return_when=_asyncio.ALL_COMPLETED)
+    except _asyncio.CancelledError:
+        if running:
+            for atask in running:
+                atask.cancel()
+            await _asyncio.wait(running, return_when=_asyncio.ALL_COMPLETED)
 
     for atask in atasks:
         task, exc = _collect(atask)
@@ -852,30 +846,24 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
 
 
 async def run_tasks_serial(tasks, pm=_PM, stdout=None, stderr=None, check=False): # pylint: disable=too-many-locals
-    loop = _asyncio.get_running_loop()
-
-    current = None
     results = []
 
-    def sigint():
-        current.cancel()
-
-    loop.add_signal_handler(_signal.SIGINT, sigint)
-
-    try:
-        for task in tasks:
-            atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
-            current = atask
+    for task in tasks:
+        atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
+        try:
             _done, _pending = await _asyncio.wait((atask,))
-
+        except _asyncio.CancelledError as err:
+            atask.cancel()
+            await _asyncio.wait((atask,))
+            result, exc = None, err
+        else:
             result, exc = _collect(atask)
-            if task.authorization_failed:
-                raise TuesUserAbort("Sudo authorization failed")
-            if exc or (check and result.returncode > 0):
-                raise TuesTaskError(task)
-            results.append(result)
-    finally:
-        loop.remove_signal_handler(_signal.SIGINT)
+
+        if task.authorization_failed:
+            raise TuesUserAbort("Sudo authorization failed")
+        if exc or (check and result.returncode > 0):
+            raise TuesTaskError(task)
+        results.append(result)
 
     return results
 
@@ -1127,14 +1115,25 @@ def run(
             loop = _asyncio.new_event_loop()
             close_loop = True
 
+    if pool_size > 1:
+        if check:
+            raise TuesError("Aborting on errors is not supported when running with a pool size > 1")
+        atask = loop.create_task(run_tasks(tasks, pm, stdout, stderr, pool_size))
+    else:
+        atask = loop.create_task(run_tasks_serial(tasks, pm, stdout, stderr, check=check))
+
+    def sigint():
+        _log.debug("Received SIGINT, cancelling task")
+        atask.cancel()
+
+    loop.add_signal_handler(_signal.SIGINT, sigint)
+
     try:
-        if pool_size > 1:
-            if check:
-                raise TuesError("Aborting on errors is not supported when running with a pool size > 1")
-            loop.run_until_complete(run_tasks(tasks, pm, stdout, stderr, pool_size))
-        else:
-            loop.run_until_complete(run_tasks_serial(tasks, pm, stdout, stderr, check=check))
+        loop.run_until_complete(atask)
+    except _asyncio.CancelledError:
+        pass
     finally:
+        loop.remove_signal_handler(_signal.SIGINT)
         if close_loop:
             loop.close()
 
