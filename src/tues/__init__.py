@@ -820,7 +820,7 @@ async def run_tasks(tasks, pm=_PM, stdout=None, stderr=None, pool_size=1): # pyl
         try:
             while len(running) < pool_size:
                 task = next(to_do)
-                atask = loop.create_task(_run(task, pm, stdout, stderr))
+                atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
                 atasks.append(atask)  # Collect asyncio task objects in order
                 running.add(atask)
         except StopIteration:
@@ -863,7 +863,7 @@ async def run_tasks_serial(tasks, pm=_PM, stdout=None, stderr=None, check=False)
 
     try:
         for task in tasks:
-            atask = loop.create_task(_run(task, pm, stdout, stderr))
+            atask = _asyncio.create_task(_run(task, pm, stdout, stderr))
             current = atask
             _done, _pending = await _asyncio.wait((atask,))
 
