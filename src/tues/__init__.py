@@ -109,6 +109,10 @@ class TuesTaskError(TuesError):
     def stderr(self):
         return self.args[0].stderr
 
+    def __str__(self):
+        task = self.args[0]
+        return f"Error running '{task.cmd}' on '{task.host}': {self.stderr or self.stdout}"
+
 
 def provider(provider, args):
     cmd = ["tues-provider-{}".format(provider)] + list(args)
