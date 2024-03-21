@@ -671,6 +671,7 @@ class TuesClient(_ssh.SSHClient):
 async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-locals,too-many-branches
     """ The real "runner" function issued for every host """
     env = {}
+    cleanup = []
 
     _prepare_user(run)
 
