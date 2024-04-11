@@ -360,6 +360,9 @@ class Task:
         self.postexec_fn = postexec_fn
         self.authorization_failed = False
 
+    def __repr__(self):
+        return f"<{type(self).__name__} cmd={self.cmd!r} host={self.host!r} at 0x{id(self):x}>"
+
     @property
     def sudo(self):
         """Whether the task requires use of `sudo`"""
