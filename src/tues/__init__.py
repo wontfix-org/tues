@@ -865,7 +865,7 @@ async def run_tasks_serial(tasks, pm=_PM, stdout=None, stderr=None, check=False)
         if task.authorization_failed:
             raise TuesUserAbort("Sudo authorization failed")
         if exc or (check and result.returncode > 0):
-            raise TuesTaskError(task)
+            raise TuesTaskError(task) from exc
         results.append(result)
 
     return results
