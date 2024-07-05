@@ -701,12 +701,14 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     # Copy files to the remote environment and put their names into `TUES_FILE<x>`,
     # even though you know the name you just put into the `files` list anyway...
     # I have no idea why I added this environment variables to be honest...
-    for idx, f in enumerate(run.files, start=1):
-        try:
-            await _ssh.scp(f, (conn, "./"), preserve=True)
-            env[f"TUES_FILE{idx}"] = f"$PWD/{_shlex.quote(_os.path.basename(f))}"
-        except _ssh.sftp.SFTPFailure as e:
-            raise TuesError(f"Could not upload {f} to {run.host}") from e
+    if run.files:
+        async with conn.start_sftp_client() as sftp:
+            for idx, f in enumerate(run.files, start=1):
+                env[f"TUES_FILE{idx}"] = f"$PWD/{_shlex.quote(_os.path.basename(f))}"
+            try:
+                await sftp.put(run.files, ".", preserve=True)
+            except _ssh.sftp.SFTPFailure as e:
+                raise TuesError(f"Error while upload files to {run.host}") from e
 
     # If there is any input to be written to the executed commands' stdin, we
     # can write it immediately if we don't have to handle sudo situation, otherwise
