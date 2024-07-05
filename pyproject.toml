@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "click",
-    "asyncssh",
+    "asyncssh>=2.13",
     "async-timeout",
     "requests>=2.4",
     "setuptools",
