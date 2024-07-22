@@ -73,7 +73,7 @@ def get_hosts(provider, args):
 @_click.option("-p", "--parallel", is_flag=True, default=False, help="Deprecated: Will set `-n 10` to cause parallel execution of tasks")
 @_click.option("-w", "--wait", is_flag=True, default=False, help="Wait after execution on every host before moving on")
 @_click.option("-v/-q", "--verbose/--quiet", default=None, help="Do not output additional information like start/finish indicators")
-@_click.option("--debug", default=False, help="Enable debug mode (for example, show Python tracebacks)")
+@_click.option("--debug", is_flag=True, default=False, help="Enable debug mode (for example, show Python tracebacks)")
 @_click.option(
     "-S",
     "--output-dir-strategy",
@@ -210,13 +210,13 @@ def cli(
             )
     except _tues.TuesErrorGroup as e:
         if debug:
-            raise
+            raise e
         _click.echo(e)
         for exc in e.exceptions:
             _click.echo(exc)
     except _tues.TuesError as e:
         if debug:
-            raise
+            raise e
 
         raise _click.ClickException(str(e))
 
