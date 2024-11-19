@@ -53,10 +53,15 @@ import tues as _tues # pylint: disable=import-self
 
 def get_hosts(provider, args):
     try:
-        return _tues.provider(provider, args)
+        hosts = _tues.provider(provider, args)
     except _tues.TuesError as e:
         _click.echo(e.args[0])
         _sys.exit(2)
+
+    if not hosts:
+        raise _click.ClickException(f"Provider {provider} returned no hosts.")
+
+    return hosts
 
 
 @_click.command(context_settings={"ignore_unknown_options": True, "auto_envvar_prefix": "TUES"}, help=__doc__)
