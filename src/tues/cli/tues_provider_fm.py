@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Tues provider that selects hosts via Foreman search
+
+The search query can be provided in the free-form EXPRESSION parameter or as a class name or pattern
+passed to the -c/--class option. When both variants are combined, only hosts that match both
+criteria are returned.
+"""
 
 import functools as _ft
 
@@ -32,7 +38,7 @@ def hosts(url, query=None):
     return [host["host"]["name"] for host in hosts]
 
 
-@_click.command()
+@_click.command(help=__doc__)
 @_click.option("-f", "--foreman-url", required=True, envvar="FOREMAN_URL")
 @_click.option("-c", "--class", "class_", help="Select hosts with the given Puppet class. Use * for globbing.")
 @_click.argument("expression", required=False)
