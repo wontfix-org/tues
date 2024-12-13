@@ -572,13 +572,18 @@ def _prepare_user(run):
     config = _os.path.expanduser("~/.ssh/config")
     if _os.path.exists(config):
         config = _ssh.config.SSHClientConfig.load(
-            None,
-            config,
-            False,
-            _getpass.getuser(),
-            run.login_user,
-            run.host,
-            run.port,
+            # SSHConfig
+            None,  # last_config
+            config,  # config_paths
+            False,  # reload
+            False,  # canonical
+            False,  # final
+
+            # SSHClientConfig
+            _getpass.getuser(),  # local_user
+            run.login_user,  # user
+            run.host,  # host
+            run.port,  # port
         )
         run.login_user = config.get("User", run.login_user)
 
