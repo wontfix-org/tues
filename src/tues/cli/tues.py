@@ -44,9 +44,9 @@ import sys as _sys
 import functools as _ft
 import asyncio as _asyncio
 import logging as _logging
+import importlib.metadata as _metadata
 
 import click as _click
-import pkg_resources as _pr
 
 import tues as _tues # pylint: disable=import-self
 
@@ -81,7 +81,7 @@ def get_hosts(provider, args):
     type=_click.Choice([_tues.DIR_IGNORE, _tues.DIR_ABORT, _tues.DIR_WIPE, _tues.DIR_ROTATE]),
     help="How to handle an existing output directory",
 )
-@_click.version_option(_pr.get_distribution("tues").version) # pylint: disable=c-extension-no-member
+@_click.version_option(_metadata.version("tues"))
 @_click.option(
     "-f",
     "--file",
