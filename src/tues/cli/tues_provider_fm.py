@@ -51,7 +51,7 @@ def cli(foreman_url, expression, class_):
             expression = f"({class_query}) and ({expression})"
         else:
             expression = class_query
-    elif not expression:
+    elif expression is None:
         raise _click.ClickException("No query specified")
 
     for host in hosts(foreman_url, expression):
