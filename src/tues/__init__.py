@@ -718,27 +718,30 @@ async def _run(run, pm, stdout=None, stderr=None): # pylint: disable=too-many-lo
     # If there is any input to be written to the executed commands' stdin, we
     # can write it immediately if we don't have to handle sudo situation, otherwise
     # we need to hold back the input until we are past the sudo prompt
-    if run.input or run.stdin:
+    if run.input:
         async def send_input():
-            if run.input:
-                input = run.input if not run.text else run.input.encode(run.encoding, run.errors)
-                session.stdin.write(input)
-                await session.stdin.drain()
-            elif isinstance(run.stdin, (str, bytes)):
-                with open(run.stdin, "rb") as f:
-                    while True:
-                        buf = f.read(4096)
-                        if buf:
-                            session.stdin.write(buf)
-                            await session.stdin.drain()
-                        if len(buf) < 4096:
-                            break
-            elif isinstance(run.stdin, (_io.StringIO, _io.BytesIO)):
-                input = run.stdin.getvalue()
-                if isinstance(input, str):
-                    input = input.encode(run.encoding, run.errors)
-                session.stdin.write(input)
-                await session.stdin.drain()
+            input = run.input if not run.text else run.input.encode(run.encoding, run.errors)
+            session.stdin.write(input)
+            await session.stdin.drain()
+            session.stdin.write_eof()
+    elif isinstance(run.stdin, (str, bytes)):
+        async def send_input():
+            with open(run.stdin, "rb") as f:
+                while True:
+                    buf = f.read(4096)
+                    if buf:
+                        session.stdin.write(buf)
+                        await session.stdin.drain()
+                    if len(buf) < 4096:
+                        break
+            session.stdin.write_eof()
+    elif isinstance(run.stdin, (_io.StringIO, _io.BytesIO)):
+        async def send_input():
+            input = run.stdin.getvalue()
+            if isinstance(input, str):
+                input = input.encode(run.encoding, run.errors)
+            session.stdin.write(input)
+            await session.stdin.drain()
             session.stdin.write_eof()
     else:
         async def send_input():
