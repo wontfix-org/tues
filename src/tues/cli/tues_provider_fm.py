@@ -3,10 +3,12 @@
 
 The search query can be provided in the free-form EXPRESSION parameter or as a class name or pattern
 passed to the -c/--class option. When both variants are combined, only hosts that match both
-criteria are returned.
+criteria are returned. The special expression "." is a shorthand for selecting hosts whose Puppet
+environment matches the current branch of the local Git repository.
 """
 
 import functools as _ft
+import subprocess as _sp
 
 import click as _click
 import requests as _requests
@@ -43,6 +45,10 @@ def hosts(url, query=None):
 @_click.option("-c", "--class", "class_", help="Select hosts with the given Puppet class. Use * for globbing.")
 @_click.argument("expression", required=False)
 def cli(foreman_url, expression, class_):
+    if expression == ".":
+        branch = _sp.check_output(["git", "branch", "--show-current"], text=True)
+        expression = f"environment = {branch}"
+
     if class_:
         op = "~" if "*" in class_ else "="
         class_query = f"puppetclass {op} \"{class_}\""
