@@ -413,14 +413,16 @@ cargo test --workspace                       # unit + Docker sshd integration te
 cargo clippy --workspace --all-targets
 
 uv venv && source .venv/bin/activate
-uv pip install maturin pytest
+uv pip install maturin pytest 'testcontainers>=4.10'
 maturin develop --release
 pytest                                       # Python tests, also against Docker sshd
 ```
 
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
-`tues` user that may sudo, and a `nopw` NOPASSWD target), start it on an
-ephemeral host port, and remove the containers when the test process exits.
+`tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
+ephemeral host port. The Rust tests do this through the `testcontainers` crate;
+the pytest suite uses the `testcontainers` Python library (Python 3.10+).
+Containers are removed when the test process exits.
 
 ## License
 

@@ -1,20 +1,23 @@
 """Shared fixtures: a Docker `sshd` on an ephemeral host port.
 
-Uses the same image as the Rust integration tests (``docker/sshd``). Requires
-a working ``docker`` CLI; the tests are skipped otherwise.
+Uses the same image as the Rust integration tests (``docker/sshd``), started
+through the `testcontainers` library. Skipped when the Docker daemon is not
+reachable. The published host port is chosen by Docker; it is never 22.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+import docker
+import docker.errors
 import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.image import DockerImage
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKER_DIR = ROOT / "docker" / "sshd"
@@ -47,46 +50,41 @@ class Sshd:
         return kw
 
 
-def _docker(*args: str, check: bool = True) -> str:
-    return subprocess.run(
-        ["docker", *args], check=check, capture_output=True, text=True
-    ).stdout.strip()
+def _daemon_reachable() -> bool:
+    client = docker.from_env()
+    try:
+        client.ping()
+        return True
+    except docker.errors.DockerException:
+        return False
+    finally:
+        client.close()
 
 
 @pytest.fixture(scope="session")
-def sshd() -> Sshd:
-    if shutil.which("docker") is None:
-        pytest.skip("docker CLI not available")
-    try:
-        _docker("info")
-    except subprocess.CalledProcessError:
-        pytest.skip("docker daemon not reachable")
+def sshd():
+    if not _daemon_reachable():
+        pytest.skip("Docker daemon is not reachable")
 
-    build = ["docker", "build", "-q", "-t", IMAGE, str(DOCKER_DIR)]
-    result = subprocess.run(build, capture_output=True, text=True)
-    if result.returncode != 0:
-        # BuildKit needs a writable ~/.docker; fall back to the classic builder.
-        result = subprocess.run(
-            build, capture_output=True, text=True, env={**os.environ, "DOCKER_BUILDKIT": "0"}
-        )
-    if result.returncode != 0:
-        raise RuntimeError(f"docker build failed:\n{result.stderr}")
-    name = f"tues-pytest-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    cid = _docker(
-        "run", "-d", "--rm", "-p", "127.0.0.1::22", "--name", name, IMAGE
-    )
+    # Keep the image: the Rust tests build the same tag.
+    image = DockerImage(path=str(DOCKER_DIR), tag=IMAGE, clean_up=False)
     try:
-        port = int(_docker("port", name, "22/tcp").splitlines()[0].rsplit(":", 1)[1])
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            logs = subprocess.run(
-                ["docker", "logs", cid], capture_output=True, text=True
-            )
-            if "Server listening on" in logs.stdout + logs.stderr:
-                break
-            time.sleep(0.2)
-        else:
-            raise RuntimeError("sshd did not start")
-        yield Sshd(host="127.0.0.1", port=port, key_path=str(DOCKER_DIR / "id_test"))
+        image.build()
     finally:
-        _docker("rm", "-f", "-v", cid, check=False)
+        image.get_docker_client().client.close()
+
+    container = (
+        DockerContainer(IMAGE)
+        .with_name(f"tues-pytest-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+        .with_exposed_ports(22)
+        .waiting_for(LogMessageWaitStrategy("Server listening on").with_startup_timeout(120))
+    )
+    container.start()
+    try:
+        yield Sshd(
+            host=container.get_container_host_ip(),
+            port=container.get_exposed_port(22),
+            key_path=str(DOCKER_DIR / "id_test"),
+        )
+    finally:
+        container.stop()
