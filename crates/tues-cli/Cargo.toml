@@ -1,0 +1,25 @@
+[package]
+name = "tues-cli"
+description = "Run a command on many hosts over SSH, optionally via sudo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "tues"
+path = "src/main.rs"
+
+[dependencies]
+tues-async.workspace = true
+tues-core.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tues-testsupport.workspace = true

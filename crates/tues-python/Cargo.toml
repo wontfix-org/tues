@@ -1,0 +1,21 @@
+[package]
+name = "tues-python"
+description = "Python bindings for tues (sync and asyncio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "_tues"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tues-core.workspace = true
+tues-async.workspace = true
+tues-sync.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3-async-runtimes.workspace = true
+tokio = { workspace = true, features = ["full"] }

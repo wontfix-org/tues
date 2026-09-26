@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/tues-core",
+    "crates/tues-async",
+    "crates/tues-sync",
+    "crates/tues",
+    "crates/tues-cli",
+    "crates/tues-python",
+    "crates/tues-testsupport",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mvb/tues-rs"
+rust-version = "1.90"
+
+[workspace.dependencies]
+tues-core = { path = "crates/tues-core", version = "0.1.0" }
+tues-async = { path = "crates/tues-async", version = "0.1.0" }
+tues-sync = { path = "crates/tues-sync", version = "0.1.0" }
+tues = { path = "crates/tues", version = "0.1.0" }
+tues-testsupport = { path = "crates/tues-testsupport" }
+
+anyhow = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "7"
+futures = "0.3"
+pyo3 = "0.29"
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
+rand = "0.9"
+rpassword = "7"
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
+secrecy = "0.10"
+testcontainers = "0.28"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "io-std", "net", "time", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = "1"

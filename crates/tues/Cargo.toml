@@ -1,0 +1,13 @@
+[package]
+name = "tues"
+description = "SSH/SFTP client library with sudo elevation: Sans-IO core, sync and async drivers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tues-core.workspace = true
+tues-sync.workspace = true
+tues-async.workspace = true

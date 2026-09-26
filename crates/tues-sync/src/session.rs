@@ -1,0 +1,109 @@
+use std::sync::Arc;
+
+use tues_core::{ConnectOptions, ExitStatus, Output, ResolvedOptions, Result};
+
+use crate::Runtime;
+use crate::child::Child;
+use crate::command::Command;
+use crate::sftp::Sftp;
+
+/// A blocking SSH session.
+///
+/// Cheap to clone; clones share the connection and runtime.
+#[derive(Clone)]
+pub struct Session {
+    pub(crate) inner: tues_async::Session,
+    pub(crate) rt: Arc<Runtime>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl Session {
+    /// Resolve options, connect (through any `ProxyJump`), verify the host
+    /// key and authenticate.
+    pub fn connect(opts: ConnectOptions) -> Result<Session> {
+        let rt = Runtime::new()?;
+        let inner = rt.block_on(tues_async::Session::connect(opts))?;
+        Ok(Session { inner, rt })
+    }
+
+    /// Connect with already resolved options.
+    pub fn connect_resolved(opts: ResolvedOptions) -> Result<Session> {
+        let rt = Runtime::new()?;
+        let inner = rt.block_on(tues_async::Session::connect_resolved(opts))?;
+        Ok(Session { inner, rt })
+    }
+
+    /// The underlying async session, usable from `self.runtime()`.
+    pub fn async_session(&self) -> &tues_async::Session {
+        &self.inner
+    }
+
+    /// Handle of the runtime driving this session.
+    pub fn runtime(&self) -> &tokio::runtime::Handle {
+        self.rt.handle()
+    }
+
+    /// Run a future on this session's runtime, blocking the caller.
+    pub fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        self.rt.block_on(fut)
+    }
+
+    pub fn options(&self) -> &ResolvedOptions {
+        self.inner.options()
+    }
+
+    pub fn user(&self) -> &str {
+        self.inner.user()
+    }
+
+    pub fn host(&self) -> &str {
+        self.inner.host()
+    }
+
+    pub fn default_run_as(&self) -> Option<&str> {
+        self.inner.default_run_as()
+    }
+
+    pub fn command(&self, program: impl Into<String>) -> Command {
+        Command::new(self.clone(), tues_core::Command::new(program))
+    }
+
+    pub fn shell(&self, command_line: impl Into<String>) -> Command {
+        Command::new(self.clone(), tues_core::Command::shell(command_line))
+    }
+
+    /// Spawn with piped stdio by default.
+    pub fn spawn(&self, cmd: &tues_core::Command) -> Result<Child> {
+        let child = self.rt.block_on(self.inner.spawn(cmd))?;
+        Ok(Child::new(child, self.rt.clone()))
+    }
+
+    /// Run to completion, capturing output.
+    pub fn output(&self, cmd: &tues_core::Command) -> Result<Output> {
+        self.rt.block_on(self.inner.output(cmd))
+    }
+
+    /// Run to completion with inherited stdout/stderr.
+    pub fn status(&self, cmd: &tues_core::Command) -> Result<ExitStatus> {
+        self.rt.block_on(self.inner.status(cmd))
+    }
+
+    /// Open an SFTP channel.
+    pub fn sftp(&self) -> Result<Sftp> {
+        let sftp = self.rt.block_on(self.inner.sftp())?;
+        Ok(Sftp::new(sftp, self.rt.clone()))
+    }
+
+    pub fn close(&self) -> Result<()> {
+        self.rt.block_on(self.inner.close())
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+}

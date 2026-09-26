@@ -1,0 +1,22 @@
+[package]
+name = "tues-async"
+description = "Async (tokio + russh) driver for tues"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tues-core.workspace = true
+bytes.workspace = true
+futures.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true
+tokio-util = "0.7"
+tracing.workspace = true
+
+[dev-dependencies]
+tues-testsupport.workspace = true
+tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,16 @@
+[package]
+name = "tues-sync"
+description = "Blocking driver for tues (std::io API over the async driver)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tues-core.workspace = true
+tues-async.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tues-testsupport.workspace = true

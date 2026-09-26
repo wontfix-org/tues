@@ -1,0 +1,13 @@
+[package]
+name = "tues-testsupport"
+description = "Docker sshd fixture for tues integration tests (not published)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tues-core.workspace = true
+testcontainers.workspace = true
+tokio = { workspace = true, features = ["full"] }
+libc = "0.2"
