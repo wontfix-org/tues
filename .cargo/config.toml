@@ -1,0 +1,8 @@
+[alias]
+# Run the Rust tests with LLVM source coverage and write an HTML report to
+# target/llvm-cov/html. Needs the llvm-tools-preview rustup component and
+# cargo-llvm-cov (`cargo install cargo-llvm-cov --locked`).
+#
+# tues-python is left out: it is a PyO3 cdylib exercised by pytest, not by
+# `cargo test`.
+coverage = "llvm-cov --workspace --exclude tues-python --all-targets --html"

@@ -412,6 +412,11 @@ Requirements: Rust 1.90+, Docker (for the integration tests), Python 3.9+ with
 cargo test --workspace                       # unit + Docker sshd integration tests
 cargo clippy --workspace --all-targets
 
+# Source coverage for the Rust tests (HTML report: target/llvm-cov/html).
+# One-time setup: rustup component add llvm-tools-preview
+#                 cargo install cargo-llvm-cov --locked
+cargo coverage
+
 uv venv && source .venv/bin/activate
 uv pip install maturin pytest 'testcontainers>=4.10'
 maturin develop --release
