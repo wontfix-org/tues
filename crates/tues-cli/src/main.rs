@@ -58,6 +58,7 @@ impl From<HostKeyCheck> for HostKeyPolicy {
     about,
     long_about = None,
     override_usage = "tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...",
+    max_term_width = 120,
     after_help = "\
 Providers:
   cl       remaining arguments are hosts
@@ -1023,9 +1024,42 @@ where
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::FileSpec;
+
+    #[test]
+    fn help_option_text_is_at_most_120_columns() {
+        fn assert_width(label: &str, render: impl FnOnce(&mut Vec<u8>)) {
+            let mut buf = Vec::new();
+            render(&mut buf);
+            let help = String::from_utf8(buf).unwrap();
+            for (n, line) in help.lines().enumerate() {
+                let width = line.chars().count();
+                assert!(
+                    width <= 120,
+                    "{label} line {} is {width} columns:\n{line}",
+                    n + 1
+                );
+            }
+        }
+
+        // A wide COLUMNS must not stretch option text past the cap. When this
+        // process has no terminal, clap reads COLUMNS; a real terminal is
+        // still limited by max_term_width.
+        let previous = std::env::var_os("COLUMNS");
+        unsafe { std::env::set_var("COLUMNS", "200") };
+        assert_width("long help", |buf| {
+            super::Cli::command().write_long_help(buf).unwrap();
+        });
+        assert_width("short help", |buf| {
+            super::Cli::command().write_help(buf).unwrap();
+        });
+        match previous {
+            Some(value) => unsafe { std::env::set_var("COLUMNS", value) },
+            None => unsafe { std::env::remove_var("COLUMNS") },
+        }
+    }
 
     #[test]
     fn file_spec_parsing() {
