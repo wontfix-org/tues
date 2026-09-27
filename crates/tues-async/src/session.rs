@@ -81,7 +81,7 @@ impl Session {
             host: opts.host_name.clone(),
             port: opts.port,
             policy: opts.host_key_policy,
-            known_hosts: opts.known_hosts_file.clone(),
+            known_hosts: opts.known_hosts_files.clone(),
         };
 
         let connect_err = |e: russh::Error| map_connect_error(e, &opts);
@@ -524,7 +524,7 @@ pub(crate) struct ClientHandler {
     host: String,
     port: u16,
     policy: HostKeyPolicy,
-    known_hosts: PathBuf,
+    known_hosts: Vec<PathBuf>,
 }
 
 impl client::Handler for ClientHandler {
@@ -541,31 +541,27 @@ impl client::Handler for ClientHandler {
         match self.policy {
             HostKeyPolicy::Off => Ok(true),
             HostKeyPolicy::Strict | HostKeyPolicy::AcceptNew => {
-                let known = match russh::keys::check_known_hosts_path(
-                    &self.host,
-                    self.port,
-                    &key,
-                    &self.known_hosts,
-                ) {
-                    Ok(v) => v,
-                    Err(russh::keys::Error::KeyChanged { line }) => {
-                        return Err(russh::Error::KeyChanged { line });
+                let mut changed = None;
+                for path in &self.known_hosts {
+                    match russh::keys::check_known_hosts_path(&self.host, self.port, &key, path) {
+                        Ok(true) => return Ok(true),
+                        Ok(false) => {}
+                        Err(russh::keys::Error::KeyChanged { line }) => changed = Some(line),
+                        Err(russh::keys::Error::IO(e))
+                            if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
                     }
-                    Err(russh::keys::Error::IO(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                        false
-                    }
-                    Err(e) => return Err(e.into()),
-                };
-                if known {
-                    return Ok(true);
+                }
+                if let Some(line) = changed {
+                    return Err(russh::Error::KeyChanged { line });
                 }
                 if self.policy == HostKeyPolicy::AcceptNew {
-                    warn!(host = %self.host, port = self.port, "adding new host key to {}", self.known_hosts.display());
+                    let Some(path) = self.known_hosts.first() else {
+                        return Err(russh::Error::UnknownKey);
+                    };
+                    warn!(host = %self.host, port = self.port, "adding new host key to {}", path.display());
                     russh::keys::known_hosts::learn_known_hosts_path(
-                        &self.host,
-                        self.port,
-                        &key,
-                        &self.known_hosts,
+                        &self.host, self.port, &key, path,
                     )?;
                     return Ok(true);
                 }

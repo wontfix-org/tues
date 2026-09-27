@@ -94,7 +94,9 @@ pub struct HostParams {
     pub identities_only: Option<bool>,
     pub proxy_jump: Option<Vec<String>>,
     pub strict_host_key_checking: Option<HostKeyPolicy>,
-    pub user_known_hosts_file: Option<PathBuf>,
+    /// Every file named by the first `UserKnownHostsFile` directive. Empty
+    /// means the directive was not set.
+    pub user_known_hosts_file: Vec<PathBuf>,
     pub connect_timeout: Option<Duration>,
     pub server_alive_interval: Option<Duration>,
     pub compression: Option<bool>,
@@ -260,16 +262,14 @@ impl SshConfig {
             .iter()
             .map(|f| expand_path(&expand_tokens(f, host, &hostname, &login_user, port)))
             .collect();
-        if let Some(k) = &p.user_known_hosts_file {
-            let s = k.to_string_lossy().into_owned();
-            p.user_known_hosts_file = Some(expand_path(&expand_tokens(
-                &s,
-                host,
-                &hostname,
-                &login_user,
-                port,
-            )));
-        }
+        p.user_known_hosts_file = p
+            .user_known_hosts_file
+            .iter()
+            .map(|k| {
+                let s = k.to_string_lossy();
+                expand_path(&expand_tokens(&s, host, &hostname, &login_user, port))
+            })
+            .collect();
         p
     }
 }
@@ -301,10 +301,14 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             })
         ),
         "stricthostkeychecking" => first!(p.strict_host_key_checking, HostKeyPolicy::parse(value)),
-        "userknownhostsfile" => first!(
-            p.user_known_hosts_file,
-            split_words(value).first().map(PathBuf::from)
-        ),
+        // The first directive wins, and every path on that line is used.
+        // A global line (before any Host) therefore applies to every host.
+        "userknownhostsfile" => {
+            if p.user_known_hosts_file.is_empty() {
+                p.user_known_hosts_file =
+                    split_words(value).into_iter().map(PathBuf::from).collect();
+            }
+        }
         "connecttimeout" => first!(
             p.connect_timeout,
             value.parse().ok().map(Duration::from_secs)
@@ -600,6 +604,36 @@ Host *
         // precedes b.conf (no Host line, inherits Host inc, Port 9).
         assert_eq!(p.port, Some(2200));
         assert_eq!(cfg.query("other").port, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn included_global_user_known_hosts_file_keeps_every_path() {
+        let dir = std::env::temp_dir().join(format!("tues-sshcfg-kh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let included = dir.join("included");
+        std::fs::write(
+            &included,
+            "UserKnownHostsFile ~/.ssh/known_hosts ~/.ssh/other_known_hosts\n",
+        )
+        .unwrap();
+        let main = dir.join("config");
+        std::fs::write(
+            &main,
+            format!("Include {}\nHost *\n  User bob\n", included.display()),
+        )
+        .unwrap();
+        let cfg = SshConfig::load(&main).unwrap();
+        let p = cfg.query("any");
+        assert_eq!(p.login_user.as_deref(), Some("bob"));
+        assert_eq!(
+            p.user_known_hosts_file,
+            vec![
+                home_dir().join(".ssh/known_hosts"),
+                home_dir().join(".ssh/other_known_hosts"),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

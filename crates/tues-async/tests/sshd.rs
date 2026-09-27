@@ -568,7 +568,7 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
 
     let mut o = f.connect_options();
     o.host_key_policy = Some(HostKeyPolicy::Strict);
-    o.known_hosts_file = Some(kh.clone());
+    o.known_hosts_file = Some(vec![kh.clone()]);
     let err = Session::connect(o)
         .await
         .expect_err("unknown key must be rejected");
@@ -576,7 +576,7 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
 
     let mut o = f.connect_options();
     o.host_key_policy = Some(HostKeyPolicy::AcceptNew);
-    o.known_hosts_file = Some(kh.clone());
+    o.known_hosts_file = Some(vec![kh.clone()]);
     Session::connect(o).await.expect("accept-new");
     let content = std::fs::read_to_string(&kh).unwrap();
     assert!(
@@ -586,9 +586,62 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
 
     let mut o = f.connect_options();
     o.host_key_policy = Some(HostKeyPolicy::Strict);
-    o.known_hosts_file = Some(kh.clone());
+    o.known_hosts_file = Some(vec![kh.clone()]);
     Session::connect(o).await.expect("now known");
     let _ = std::fs::remove_file(&kh);
+}
+
+#[tokio::test]
+async fn included_global_user_known_hosts_file_is_searched() {
+    let f = sshd();
+    let dir = std::env::temp_dir().join(format!("tues-kh-inc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let primary = dir.join("known_hosts");
+    let extra = dir.join("extra_known_hosts");
+    std::fs::write(&primary, "").unwrap();
+
+    let mut learn = f.connect_options();
+    learn.host_key_policy = Some(HostKeyPolicy::AcceptNew);
+    learn.known_hosts_file = Some(vec![extra.clone()]);
+    Session::connect(learn)
+        .await
+        .expect("learn into the second file");
+
+    let included = dir.join("included");
+    std::fs::write(
+        &included,
+        format!(
+            "UserKnownHostsFile {} {}\n",
+            primary.display(),
+            extra.display()
+        ),
+    )
+    .unwrap();
+    let main = dir.join("config");
+    std::fs::write(
+        &main,
+        format!(
+            "Include {}\nHost box\n  HostName {}\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n",
+            included.display(),
+            f.host,
+            f.port,
+            USER,
+            f.key_path.display()
+        ),
+    )
+    .unwrap();
+    let cfg = SshConfig::load(&main).unwrap();
+    let opts = ConnectOptions::new("box")
+        .use_agent(false)
+        .host_key_policy(HostKeyPolicy::Strict)
+        .ssh_config(SshConfigSource::Parsed(cfg))
+        .connect_timeout(Duration::from_secs(20))
+        .password_manager(shared(StaticPasswordManager::new(PASSWORD)));
+    Session::connect(opts)
+        .await
+        .expect("host key is in the second UserKnownHostsFile");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

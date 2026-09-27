@@ -127,7 +127,9 @@ pub struct ConnectOptions {
     pub kbd_interactive_authentication: Option<bool>,
     pub use_agent: Option<bool>,
     pub host_key_policy: Option<HostKeyPolicy>,
-    pub known_hosts_file: Option<PathBuf>,
+    /// Explicit known_hosts files, replacing ssh_config and the default.
+    /// `None` consults `UserKnownHostsFile`, then `~/.ssh/known_hosts`.
+    pub known_hosts_file: Option<Vec<PathBuf>>,
     pub ssh_config: SshConfigSource,
     /// Default user commands run as. `None` means the login user; any other
     /// value runs commands via `sudo -u`.
@@ -244,7 +246,7 @@ impl ConnectOptions {
     }
 
     pub fn known_hosts_file(mut self, path: impl Into<PathBuf>) -> Self {
-        self.known_hosts_file = Some(path.into());
+        self.known_hosts_file = Some(vec![path.into()]);
         self
     }
 
@@ -375,11 +377,16 @@ impl ConnectOptions {
                 .host_key_policy
                 .or(params.strict_host_key_checking)
                 .unwrap_or_default(),
-            known_hosts_file: self
-                .known_hosts_file
-                .clone()
-                .or(params.user_known_hosts_file.clone())
-                .unwrap_or_else(|| ssh_config::home_dir().join(".ssh").join("known_hosts")),
+            known_hosts_files: match &self.known_hosts_file {
+                Some(files) => files
+                    .iter()
+                    .map(|p| ssh_config::expand_path(&p.to_string_lossy()))
+                    .collect(),
+                None if !params.user_known_hosts_file.is_empty() => {
+                    params.user_known_hosts_file.clone()
+                }
+                None => vec![ssh_config::home_dir().join(".ssh").join("known_hosts")],
+            },
             request_tty: params.request_tty.unwrap_or(false),
             user: self.user.clone(),
             password_manager,
@@ -411,7 +418,9 @@ pub struct ResolvedOptions {
     pub kbd_interactive_authentication: bool,
     pub use_agent: bool,
     pub host_key_policy: HostKeyPolicy,
-    pub known_hosts_file: PathBuf,
+    /// Files checked for the server host key, in order. A new key is written
+    /// to the first one.
+    pub known_hosts_files: Vec<PathBuf>,
     pub request_tty: bool,
     /// Default user commands run as. `None` means the login user.
     pub user: Option<String>,
@@ -430,7 +439,7 @@ impl std::fmt::Debug for ResolvedOptions {
             .field("identity_files", &self.identity_files)
             .field("proxy_jump", &self.proxy_jump)
             .field("host_key_policy", &self.host_key_policy)
-            .field("known_hosts_file", &self.known_hosts_file)
+            .field("known_hosts_files", &self.known_hosts_files)
             .field("user", &self.user)
             .finish_non_exhaustive()
     }
@@ -460,7 +469,7 @@ impl ResolvedOptions {
             kbd_interactive_authentication: Some(self.kbd_interactive_authentication),
             use_agent: Some(self.use_agent),
             host_key_policy: Some(self.host_key_policy),
-            known_hosts_file: Some(self.known_hosts_file.clone()),
+            known_hosts_file: Some(self.known_hosts_files.clone()),
             ssh_config: match &self.ssh_config {
                 Some(c) => SshConfigSource::Parsed(c.clone()),
                 None => SshConfigSource::None,

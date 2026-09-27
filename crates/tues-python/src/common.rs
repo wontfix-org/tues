@@ -420,7 +420,9 @@ pub fn connect_options(
             PyValueError::new_err(format!("host_key_policy: unknown value {p:?}"))
         })?);
     }
-    o.known_hosts_file = kw(kwargs, "known_hosts_file")?;
+    if let Some(p) = kw::<PathBuf>(kwargs, "known_hosts_file")? {
+        o.known_hosts_file = Some(vec![p]);
+    }
     if let Some(d) = kwargs
         && let Some(v) = d.get_item("ssh_config")?
     {
