@@ -471,6 +471,11 @@ and runs the channel through `SudoFilter`:
 Because the nonces are random per invocation, remote output cannot forge a
 prompt.
 
+SFTP follows the same rule. With no session user it is the server's `sftp`
+subsystem, as the login user. With a session user, `tues` starts `sftp-server`
+through that sudo handshake (the marker is stripped before the SFTP greeting),
+so uploads and downloads run as the command user rather than the login user.
+
 ## Development
 
 Requirements: Rust 1.90+, Docker (for the integration tests), Python 3.9+ with

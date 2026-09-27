@@ -393,6 +393,48 @@ async fn status_with_null_stdio() {
 }
 
 #[tokio::test]
+async fn sftp_as_session_user_uses_sudo() {
+    // `tues` cannot create files in another user's home. Both targets succeed
+    // only because the SFTP server itself runs as that user.
+    for (user, path) in [
+        (NOPASSWD_USER, format!("/home/{NOPASSWD_USER}/tues-sftp")),
+        ("root", format!("/root/tues-sftp-{}", std::process::id())),
+    ] {
+        let mut opts = sshd().connect_options();
+        opts.user = Some(user.into());
+        let s = Session::connect(opts).await.unwrap();
+        let sftp = s.sftp().await.unwrap();
+        sftp.write(&path, b"owned").await.unwrap();
+        let owner = s
+            .command("stat")
+            .arg("-c")
+            .arg("%U")
+            .arg(&path)
+            .output()
+            .await
+            .unwrap();
+        assert!(owner.status.success(), "{owner:?}");
+        assert_eq!(owner.stdout_lossy().trim(), user);
+        sftp.remove_file(&path).await.unwrap();
+        s.close().await.unwrap();
+    }
+
+    let s = connect().await;
+    let err = s
+        .sftp()
+        .await
+        .unwrap()
+        .write(format!("/home/{NOPASSWD_USER}/tues-denied"), b"no")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().to_ascii_lowercase().contains("denied")
+            || err.to_string().to_ascii_lowercase().contains("permission"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
 async fn sftp_roundtrip() {
     let s = connect().await;
     let sftp = s.sftp().await.unwrap();

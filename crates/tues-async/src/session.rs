@@ -14,8 +14,8 @@ use tracing::{debug, warn};
 
 use tues_core::password::PasswordKind;
 use tues_core::{
-    ConnectOptions, Error, ExitStatus, HostKeyPolicy, Output, PasswordRequest, ResolvedOptions,
-    Result, SecretString, SharedPasswordManager, Stdio,
+    ConnectOptions, Effect, Error, Event, ExecMachine, ExitStatus, HostKeyPolicy, Output,
+    PasswordRequest, ResolvedOptions, Result, SecretString, SharedPasswordManager, Stdio,
 };
 
 use crate::child::{Child, spawn_child};
@@ -252,9 +252,21 @@ impl Session {
         ))
     }
 
-    /// Open an SFTP subsystem channel.
+    /// Open an SFTP channel.
+    ///
+    /// With no session user this is the server's `sftp` subsystem, running as
+    /// the login user. When the session has a default user, `sftp-server` is
+    /// started through the same `sudo -u` handshake as a command, so file
+    /// access matches command execution.
     pub async fn sftp(&self) -> Result<Sftp> {
         self.ensure_open()?;
+        match self.inner.opts.user.as_deref() {
+            Some(user) => self.open_sftp_as(user).await,
+            None => self.open_sftp_subsystem().await,
+        }
+    }
+
+    async fn open_sftp_subsystem(&self) -> Result<Sftp> {
         let channel = self
             .inner
             .handle
@@ -266,6 +278,90 @@ impl Session {
             .await
             .map_err(map_channel_error)?;
         Sftp::new(channel.into_stream()).await
+    }
+
+    /// Exec `sftp-server` as `user` via sudo, finish the password conversation,
+    /// then speak SFTP on the same channel.
+    async fn open_sftp_as(&self, user: &str) -> Result<Sftp> {
+        let opts = &self.inner.opts;
+        let mut cmd = tues_core::Command::shell(SFTP_SERVER_SCRIPT);
+        cmd.user(user)
+            .stdin(Stdio::Piped)
+            .stdout(Stdio::Piped)
+            .stderr(Stdio::Piped);
+        let plan = cmd.plan(Stdio::Piped, None);
+        let password_request = plan.sudo.as_ref().map(|s| {
+            PasswordRequest::sudo(
+                opts.alias.clone(),
+                opts.port,
+                opts.login_user.clone(),
+                s.user.clone(),
+            )
+        });
+
+        let mut channel = self
+            .inner
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(map_channel_error)?;
+        channel
+            .exec(true, plan.command_line.as_bytes().to_vec())
+            .await
+            .map_err(map_channel_error)?;
+
+        let mut machine = ExecMachine::new(&plan);
+        let mut prefix = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        loop {
+            while let Some(effect) = machine.poll_effect() {
+                match effect {
+                    Effect::Stdout(b) => prefix.extend_from_slice(&b),
+                    Effect::Stderr(b) => stderr.extend_from_slice(&b),
+                    Effect::WriteChannel(b) => {
+                        channel.data(&b[..]).await.map_err(map_channel_error)?;
+                    }
+                    Effect::WriteChannelSecret(z) => {
+                        channel.data(&z[..]).await.map_err(map_channel_error)?;
+                    }
+                    Effect::ChannelEof => {
+                        // Only the failure path (sudo rejected, server missing)
+                        // closes stdin. After elevation the server needs it.
+                        if !machine.stdin_open() {
+                            channel.eof().await.map_err(map_channel_error)?;
+                        }
+                    }
+                    Effect::RequestPassword { retry } => {
+                        let Some(req) = password_request.clone() else {
+                            machine.handle(Event::PasswordUnavailable(Error::Password(
+                                "no sudo context".into(),
+                            )));
+                            continue;
+                        };
+                        match request_password(&opts.password_manager, req, retry).await {
+                            Ok(pw) => machine.handle(Event::Password(pw)),
+                            Err(e) => machine.handle(Event::PasswordUnavailable(e)),
+                        }
+                    }
+                    Effect::Finished(result) => {
+                        let _ = channel.close().await;
+                        return Err(sftp_start_error(result, &stderr));
+                    }
+                }
+            }
+            if machine.stdin_open() {
+                break;
+            }
+            match channel.wait().await {
+                None => machine.handle(Event::Close),
+                Some(msg) => {
+                    if let Some(ev) = channel_event(msg) {
+                        machine.handle(ev);
+                    }
+                }
+            }
+        }
+        Sftp::with_prefix(prefix, channel.into_stream()).await
     }
 
     /// Disconnect. Further use of this session (or its clones) fails with
@@ -665,6 +761,24 @@ async fn load_identity(path: &Path, opts: &ResolvedOptions) -> Result<PrivateKey
         "could not decrypt {}",
         path.display()
     )))
+}
+
+/// Shell snippet that replaces itself with the first `sftp-server` binary found.
+const SFTP_SERVER_SCRIPT: &str = "\
+for p in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server \
+/usr/libexec/sftp-server /usr/lib/ssh/sftp-server; do \
+if [ -x \"$p\" ]; then exec \"$p\"; fi; \
+done; \
+echo 'tues: sftp-server binary not found' >&2; exit 127";
+
+fn sftp_start_error(result: Result<ExitStatus>, stderr: &[u8]) -> Error {
+    let detail = String::from_utf8_lossy(stderr).trim().to_string();
+    match result {
+        Err(e) if detail.is_empty() => e,
+        Err(e) => Error::Sftp(format!("{e} ({detail})")),
+        Ok(status) if detail.is_empty() => Error::Sftp(format!("sftp server exited ({status})")),
+        Ok(status) => Error::Sftp(format!("sftp server exited ({status}): {detail}")),
+    }
 }
 
 /// Convert a russh channel message into a machine event.

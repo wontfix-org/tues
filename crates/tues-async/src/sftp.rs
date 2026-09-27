@@ -77,6 +77,25 @@ impl Sftp {
         })
     }
 
+    /// Like [`Sftp::new`], but `prefix` is delivered before anything read from
+    /// `stream`. Used when the sudo success marker and the first SFTP bytes
+    /// arrived in the same channel packet.
+    pub(crate) async fn with_prefix<S>(prefix: Vec<u8>, stream: S) -> Result<Self>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if prefix.is_empty() {
+            Self::new(stream).await
+        } else {
+            Self::new(PrefixStream {
+                prefix,
+                pos: 0,
+                inner: stream,
+            })
+            .await
+        }
+    }
+
     /// Read a whole file.
     pub async fn read(&self, path: impl Into<String>) -> Result<Vec<u8>> {
         self.inner.read(path).await.map_err(map_err)
@@ -182,6 +201,47 @@ impl Sftp {
     /// Close the SFTP channel.
     pub async fn close(&self) -> Result<()> {
         self.inner.close().await.map_err(map_err)
+    }
+}
+
+/// Bytes already pulled off the channel during the sudo handshake, then the channel.
+struct PrefixStream<S> {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.pos < self.prefix.len() {
+            let n = buf.remaining().min(self.prefix.len() - self.pos);
+            buf.put_slice(&self.prefix[self.pos..self.pos + n]);
+            self.pos += n;
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 

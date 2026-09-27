@@ -94,6 +94,9 @@ impl Session {
     }
 
     /// Open an SFTP channel.
+    ///
+    /// Runs as the session's default user (via `sudo`) when one is set, and
+    /// as the login user otherwise.
     pub fn sftp(&self) -> Result<Sftp> {
         let sftp = self.rt.block_on(self.inner.sftp())?;
         Ok(Sftp::new(sftp, self.rt.clone()))
