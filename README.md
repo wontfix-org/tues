@@ -47,7 +47,9 @@ tues [OPTIONS] <COMMAND> <SERVERS>...
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
-  -j, --jobs <JOBS>          Maximum number of hosts worked on concurrently
+  -j, --jobs <N>             Hosts worked on concurrently (default: 1)
+      --check                Stop after the first failure (one job only)
+      --no-check             Keep going after a failure (default)
   -p, --port <PORT>          SSH port
   -i, --identity <FILE>      Identity file; may be repeated
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
@@ -76,10 +78,12 @@ tues --no-pty 'tar cz /var/log' backup01 > logs.tgz
 TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' db01 db02
 ```
 
-With several hosts each output line is prefixed with `host: `, and the exit
-status is `0` only if every host succeeded. With one host, output is passed
-through unchanged and the exit status is the remote one (`255` on connection
-errors, like `ssh`).
+Hosts are visited one after another. `-j` raises how many run at once. With
+several hosts each output line is prefixed with `host: `, and the exit status
+is `0` only if every host succeeded. With one host, output is passed through
+unchanged and the exit status is the remote one (`255` on connection errors,
+like `ssh`). `--check` stops at the first host that fails or exits non-zero;
+it is rejected when more than one job runs at a time.
 
 ```sh
 cargo install --path crates/tues-cli

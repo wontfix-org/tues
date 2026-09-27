@@ -115,6 +115,46 @@ fn unreachable_hosts_report_errors_and_ipv6_ports_are_parsed() {
 }
 
 #[test]
+fn check_stops_after_the_first_failure() {
+    let f = sshd();
+    let out = tues()
+        .arg("--check")
+        .arg("--connect-timeout")
+        .arg("2")
+        .arg("exit 4")
+        .arg(&f.host)
+        .arg("127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("127.0.0.1"),
+        "later host must not be started: {stderr}"
+    );
+}
+
+#[test]
+fn check_rejects_more_than_one_job() {
+    let f = sshd();
+    let out = tues()
+        .arg("--check")
+        .arg("-j")
+        .arg("2")
+        .arg("true")
+        .arg(&f.host)
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--check only works with one job at a time"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn wrong_sudo_password_is_an_error() {
     let f = sshd();
     let out = tues()

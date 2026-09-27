@@ -57,9 +57,18 @@ struct Cli {
     #[arg(short = 'u', long)]
     user: Option<String>,
 
-    /// Maximum number of hosts worked on concurrently (default: all).
-    #[arg(short = 'j', long)]
-    jobs: Option<usize>,
+    /// Maximum number of hosts worked on concurrently.
+    #[arg(short = 'j', long, default_value_t = 1)]
+    jobs: usize,
+
+    /// Stop after the first host that fails or exits non-zero.
+    /// Only valid with one job at a time.
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_check")]
+    check: bool,
+
+    /// Keep going after a host fails or exits non-zero (the default).
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "check")]
+    no_check: bool,
 
     /// SSH port.
     #[arg(short = 'p', long)]
@@ -195,11 +204,33 @@ async fn main() -> anyhow::Result<()> {
 
     let multi = cli.servers.len() > 1;
     let prefix = multi && !cli.no_prefix;
-    let jobs = cli.jobs.unwrap_or(cli.servers.len()).max(1);
+    let jobs = cli.jobs.max(1);
+    if cli.fail_fast() && jobs != 1 {
+        anyhow::bail!("--check only works with one job at a time");
+    }
     let sem = Arc::new(Semaphore::new(jobs));
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let stderr = Arc::new(Mutex::new(tokio::io::stderr()));
     let cli = Arc::new(cli);
+
+    if cli.fail_fast() {
+        let mut exit_code = 0i32;
+        for server in &cli.servers {
+            let outcome = run_host(
+                &cli,
+                server,
+                password_manager.clone(),
+                prefix,
+                stdout.clone(),
+                stderr.clone(),
+            )
+            .await;
+            if note_failure(server, &outcome, multi, cli.verbose, &mut exit_code) {
+                break;
+            }
+        }
+        std::process::exit(exit_code);
+    }
 
     let mut tasks = Vec::with_capacity(cli.servers.len());
     for server in cli.servers.clone() {
@@ -222,28 +253,45 @@ async fn main() -> anyhow::Result<()> {
 
     let mut exit_code = 0i32;
     for r in &results {
-        match &r.outcome {
-            Ok(status) => {
-                if !status.success() {
-                    exit_code = if multi { 1 } else { status.code().unwrap_or(1) };
-                    if multi && cli.verbose > 0 {
-                        eprintln!("{}: {}", r.server, status);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("{}: error: {e}", r.server);
-                exit_code = if multi { 1 } else { 255 };
-            }
-        }
+        note_failure(&r.server, &r.outcome, multi, cli.verbose, &mut exit_code);
     }
     std::process::exit(exit_code);
+}
+
+/// Record a host that failed or exited non-zero. Returns whether this host was unsuccessful.
+fn note_failure(
+    server: &str,
+    outcome: &Result<tues_core::ExitStatus, Error>,
+    multi: bool,
+    verbose: u8,
+    exit_code: &mut i32,
+) -> bool {
+    match outcome {
+        Ok(status) if status.success() => false,
+        Ok(status) => {
+            *exit_code = if multi { 1 } else { status.code().unwrap_or(1) };
+            if multi && verbose > 0 {
+                eprintln!("{server}: {status}");
+            }
+            true
+        }
+        Err(e) => {
+            eprintln!("{server}: error: {e}");
+            *exit_code = if multi { 1 } else { 255 };
+            true
+        }
+    }
 }
 
 impl Cli {
     /// A PTY is allocated unless `--no-pty` was given last.
     fn use_pty(&self) -> bool {
         self.pty || !self.no_pty
+    }
+
+    /// Stop at the first unsuccessful host unless `--no-check` was given last.
+    fn fail_fast(&self) -> bool {
+        self.check && !self.no_check
     }
 }
 
