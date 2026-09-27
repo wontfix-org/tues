@@ -18,9 +18,7 @@ fn tues() -> Command {
         .arg(&f.key_path)
         .arg("-l")
         .arg(USER)
-        .env("TUES_TEST_PW", PASSWORD)
-        .arg("--password-env")
-        .arg("TUES_TEST_PW");
+        .env("TUES_PW", PASSWORD);
     c
 }
 
@@ -237,7 +235,7 @@ fn missing_file_upload_fails_before_the_command() {
 fn wrong_sudo_password_is_an_error() {
     let f = sshd();
     let out = tues()
-        .env("TUES_TEST_PW", "wrong")
+        .env("TUES_PW", "wrong")
         .arg("-u")
         .arg("root")
         .arg("id")
@@ -286,7 +284,9 @@ fn sudo_runs_without_a_pty_unless_requested() {
 }
 
 fn tues_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tues"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_tues"));
+    c.env_remove("TUES_PW");
+    c
 }
 
 fn write_provider(dir: &std::path::Path, name: &str, body: &str) {

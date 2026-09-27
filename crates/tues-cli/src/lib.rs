@@ -69,7 +69,9 @@ Providers:
   <name>   run tues-provider-<name> and read hosts from its stdout
 
 tues options come before the command. Arguments and options after the provider
-name are passed through to that provider."
+name are passed through to that provider.
+
+When TUES_PW is set, tues uses it for login and sudo passwords instead of prompting."
 )]
 struct Cli {
     /// Login user (default: from ssh_config or the local user).
@@ -135,11 +137,6 @@ struct Cli {
     /// known_hosts file.
     #[arg(long)]
     known_hosts: Option<PathBuf>,
-
-    /// Take passwords (login and sudo) from this environment variable
-    /// instead of prompting on the terminal.
-    #[arg(long, value_name = "VAR")]
-    password_env: Option<String>,
 
     /// Connection timeout in seconds.
     #[arg(long, value_name = "SECS")]
@@ -380,16 +377,15 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
         .with_writer(std::io::stderr)
         .try_init();
 
-    let password_manager = match &cli.password_env {
-        Some(var) => {
-            let pw = std::env::var(var)
-                .with_context(|| format!("environment variable {var} is not set"))?;
-            shared(StaticPasswordManager::new(pw))
-        }
-        None => shared(FleetPasswordManager {
+    let password_manager = match std::env::var("TUES_PW") {
+        Ok(pw) => shared(StaticPasswordManager::new(pw)),
+        Err(std::env::VarError::NotPresent) => shared(FleetPasswordManager {
             prompter: FleetPrompter,
             cache: HashMap::new(),
         }),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("TUES_PW is not valid Unicode");
+        }
     };
 
     let jobs = cli.job_count();

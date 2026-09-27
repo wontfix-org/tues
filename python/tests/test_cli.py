@@ -27,13 +27,12 @@ def test_cli_main_reports_usage_errors(capfd):
 
 
 def test_python_m_tues_runs_a_command(sshd):
-    env = dict(os.environ, TUES_TEST_PW=PASSWORD)
+    env = dict(os.environ, TUES_PW=PASSWORD)
     proc = subprocess.run(
         [
             sys.executable, "-m", "tues",
             "--no-ssh-config", "--host-key-check", "off",
             "--port", str(sshd.port), "-i", sshd.key_path, "-l", USER,
-            "--password-env", "TUES_TEST_PW",
             "echo hello; echo oops >&2; exit 3",
             "cl", sshd.host,
         ],

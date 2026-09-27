@@ -60,7 +60,6 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
       --no-pty               Do not request a pseudo-terminal
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
-      --password-env <VAR>   Take passwords from this environment variable
       --connect-timeout <S>  Connection timeout in seconds
       --no-prefix            Do not prefix output lines with the host name
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
@@ -88,8 +87,9 @@ tues -l deploy -u root -j 4 'systemctl restart nginx' cl web01 web02 web03
 # `--pty` allocates a pseudo-terminal; `--no-pty` overrides a script that asks for one.
 tues 'tar cz /var/log' cl backup01 > logs.tgz
 
-# Passwords from the environment instead of the terminal.
-TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' cl db01 db02
+# When TUES_PW is set, tues uses it for login and sudo passwords.
+# Otherwise it prompts on the terminal.
+TUES_PW=s3cret tues -u root 'apt-get update' cl db01 db02
 
 # Hosts from a file, and from a provider executable (tues-provider-netbox).
 tues 'uptime' file web.list
