@@ -522,6 +522,26 @@ maturin develop --release
 pytest                                       # Python tests, also against Docker sshd
 ```
 
+## Release
+
+`scripts/release` sets the workspace version (the Python package reads it from
+there), commits it, and tags `v<version>`. It then builds an sdist and one
+wheel per CPython into `dist/` for an internal index. The tag is not pushed
+and the artifacts are not uploaded.
+
+```sh
+scripts/release 0.2.0
+git push origin HEAD v0.2.0
+twine upload --repository-url "$TUES_PYPI_URL" dist/*
+```
+
+By default that is Python 3.9, 3.11, 3.12 and 3.13. `uv python install`
+fetches a managed CPython for each of those, ignoring the project virtualenv,
+and `uvx` runs maturin against those binaries. Each wheel is tagged for that
+interpreter (`cp39`, `cp311`, `cp312`, `cp313`) and for the platform where the
+helper runs. The sdist is built first and the wheels are built from it. Change
+the set with `--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. `uv` is required.
+
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
 ephemeral host port. The Rust tests do this through the `testcontainers` crate;

@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Set the workspace version, tag it, and build PyPI artifacts.
+
+Usage: scripts/release [--dry-run] [--python 3.9,3.11,3.12,3.13] VERSION
+
+VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
+stripped). The script commits the version bump, creates an annotated tag
+vVERSION, and writes a release sdist plus one wheel per configured CPython
+to dist/. It does not push the tag or upload the files.
+
+The default interpreters are Python 3.9, 3.11, 3.12 and 3.13. Override them
+with --python or TUES_PYTHON_VERSIONS (comma or space separated). uv installs
+a managed CPython for each one and uvx runs maturin against those binaries,
+so each wheel carries that interpreter's ABI tag for the platform the helper
+runs on. The project virtualenv is ignored.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import List, Optional, Sequence
+
+ROOT = Path(__file__).resolve().parent.parent
+CARGO_TOML = ROOT / "Cargo.toml"
+DIST = ROOT / "dist"
+
+DEFAULT_PYTHONS = ["3.9", "3.11", "3.12", "3.13"]
+MATURIN = "maturin>=1.7,<2"
+# Path dependencies in Cargo.toml that pin the workspace version.
+VERSIONED_PATH_DEPS = 4
+
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z.]+)?$")
+PYTHON_RE = re.compile(r"^[0-9]+\.[0-9]+$")
+
+
+class ReleaseError(Exception):
+    def __init__(self, message: str, code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def split_versions(text: str) -> List[str]:
+    return [part for part in re.split(r"[,\s]+", text) if part]
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="scripts/release",
+        usage="scripts/release [--dry-run] [--python 3.9,3.11,3.12,3.13] VERSION",
+        description="Set the workspace version, tag it, and build PyPI artifacts.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="print the plan and stop")
+    parser.add_argument(
+        "--python",
+        metavar="VERSIONS",
+        help="CPython releases to build wheels for (comma or space separated)",
+    )
+    parser.add_argument("version", metavar="VERSION", help="release version, e.g. 0.2.0")
+    return parser.parse_args(argv)
+
+
+def run(
+    args: Sequence[str],
+    *,
+    cwd: Optional[Path] = None,
+    env: Optional[dict] = None,
+    capture: bool = False,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        list(args),
+        cwd=str(cwd or ROOT),
+        env=env,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+    )
+
+
+def git(*args: str, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess:
+    return run(["git", *args], capture=capture, check=check)
+
+
+def workspace_version() -> str:
+    in_pkg = False
+    for line in CARGO_TOML.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_pkg = stripped == "[workspace.package]"
+            continue
+        if in_pkg and stripped.startswith("version = "):
+            return stripped.split('"')[1]
+    raise ReleaseError("workspace.package.version not found")
+
+
+def rewrite_cargo_toml(old: str, new: str) -> None:
+    """Bump the workspace package version and the path deps that pin it."""
+    old_field = f'version = "{old}"'
+    new_field = f'version = "{new}"'
+    out = []
+    in_pkg = False
+    replaced_pkg = False
+    replaced_deps = 0
+    for line in CARGO_TOML.read_text().splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_pkg = stripped == "[workspace.package]"
+        if in_pkg and stripped.startswith("version = "):
+            line = line.replace(old_field, new_field, 1)
+            replaced_pkg = new_field in line
+        elif 'path = "crates/tues' in line and old_field in line:
+            line = line.replace(old_field, new_field, 1)
+            replaced_deps += 1
+        out.append(line)
+    if not replaced_pkg or replaced_deps != VERSIONED_PATH_DEPS:
+        raise ReleaseError(
+            f"refusing to rewrite Cargo.toml (package={replaced_pkg}, deps={replaced_deps})"
+        )
+    CARGO_TOML.write_text("".join(out))
+
+
+def tag_exists(tag: str) -> bool:
+    result = git("rev-parse", "-q", "--verify", f"refs/tags/{tag}", capture=True, check=False)
+    return result.returncode == 0
+
+
+def uv_env() -> dict:
+    # Discovery from this repo picks up .venv, so a matching request would tag
+    # every wheel for the project interpreter. Hide the venv from uv.
+    env = dict(os.environ)
+    env.pop("VIRTUAL_ENV", None)
+    return env
+
+
+def managed_interpreters(pythons: Sequence[str]) -> List[str]:
+    if shutil.which("uv") is None:
+        raise ReleaseError("uv is required to install the release interpreters and run maturin")
+    env = uv_env()
+    print(f"Installing Python {' '.join(pythons)}", flush=True)
+    run(["uv", "python", "install", *pythons], env=env)
+    interpreters = []
+    outside = Path(tempfile.gettempdir())
+    for py in pythons:
+        found = run(
+            ["uv", "python", "find", "--no-project", "--managed-python", py],
+            cwd=outside,
+            env=env,
+            capture=True,
+        ).stdout.strip()
+        got = run(
+            [found, "-c", 'import sys; print("%d.%d" % sys.version_info[:2])'],
+            capture=True,
+        ).stdout.strip()
+        if got != py:
+            raise ReleaseError(f"uv resolved Python {py} to {found}, which is {got}")
+        interpreters.append(found)
+    return interpreters
+
+
+def build(interpreters: Sequence[str]) -> None:
+    shutil.rmtree(DIST, ignore_errors=True)
+    DIST.mkdir()
+    # One sdist, then a wheel per interpreter built from it. Maturin tags each
+    # wheel for that CPython ABI and the lowest manylinux (or native) platform
+    # the extension actually requires.
+    cmd = [
+        "uvx", "--from", MATURIN, "maturin", "build",
+        "--release", "--locked", "--strip", "--sdist", "--out", str(DIST),
+    ]
+    for interpreter in interpreters:
+        cmd += ["-i", interpreter]
+    run(cmd, env=uv_env())
+
+
+def main(argv: Sequence[str]) -> int:
+    args = parse_args(argv)
+
+    pythons = DEFAULT_PYTHONS
+    if os.environ.get("TUES_PYTHON_VERSIONS"):
+        pythons = split_versions(os.environ["TUES_PYTHON_VERSIONS"])
+    if args.python is not None:
+        pythons = split_versions(args.python)
+    if not pythons:
+        raise ReleaseError("no Python versions given", code=2)
+    for py in pythons:
+        if not PYTHON_RE.match(py):
+            raise ReleaseError(f"not a Python version: {py}", code=2)
+
+    version = args.version[1:] if args.version.startswith("v") else args.version
+    if not VERSION_RE.match(version):
+        raise ReleaseError(f"not a version: {args.version}", code=2)
+    tag = f"v{version}"
+
+    current = workspace_version()
+
+    if git("status", "--porcelain", capture=True).stdout.strip():
+        if not args.dry_run:
+            raise ReleaseError("working tree is not clean")
+        print("working tree is not clean; a real run would stop here", file=sys.stderr)
+
+    need_commit = False
+    need_tag = False
+    if tag_exists(tag):
+        if current != version:
+            raise ReleaseError(
+                f"tag {tag} already exists, but the workspace version is {current}"
+            )
+    else:
+        need_tag = True
+        need_commit = current != version
+
+    if args.dry_run:
+        if need_commit:
+            print(f"would commit version {current} -> {version}")
+        if need_tag:
+            print(f"would tag {tag}")
+        else:
+            print(f"tag {tag} already exists")
+        print(
+            f"would install Python {' '.join(pythons)} with uv and build one wheel each, "
+            "plus an sdist, in dist/"
+        )
+        return 0
+
+    if need_commit:
+        rewrite_cargo_toml(current, version)
+        refreshed = run(
+            ["cargo", "metadata", "--offline", "--format-version", "1"],
+            capture=True,
+            check=False,
+        )
+        if refreshed.returncode != 0:
+            git("checkout", "--", "Cargo.toml", "Cargo.lock")
+            raise ReleaseError("cargo metadata rejected the new version; Cargo.toml restored")
+        git("add", "Cargo.toml", "Cargo.lock")
+        git("commit", "-m", f"Release {version}.")
+    if need_tag:
+        git("tag", "-a", tag, "-m", f"tues {version}")
+        print(f"tagged {tag}")
+
+    build(managed_interpreters(pythons))
+
+    print()
+    print("Artifacts in dist/:")
+    for artifact in sorted(DIST.iterdir()):
+        print(artifact.name)
+    print()
+    print("The tag is local. Publish it with:")
+    print(f"  git push origin HEAD {tag}")
+    print()
+    print("Upload the artifacts to an internal index with:")
+    print('  twine upload --repository-url "$TUES_PYPI_URL" dist/*')
+    print("or:")
+    print('  uv publish --publish-url "$TUES_PYPI_URL" dist/*')
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except ReleaseError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(exc.code)
+    except subprocess.CalledProcessError as exc:
+        print(f"{exc.cmd[0]} exited with {exc.returncode}", file=sys.stderr)
+        sys.exit(exc.returncode or 1)
