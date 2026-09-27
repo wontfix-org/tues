@@ -3,7 +3,9 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use tues_core::{Error, OpenOptions, StaticPasswordManager, SudoError, shared};
+use tues_core::{
+    CommandUser, Error, OpenOptions, PtyConfig, StaticPasswordManager, Stdio, SudoError, shared,
+};
 use tues_sync::Session;
 use tues_testsupport::{PASSWORD, USER, sshd};
 
@@ -176,6 +178,42 @@ fn sessions_are_usable_from_multiple_threads() {
     for (i, h) in handles.into_iter().enumerate() {
         assert_eq!(h.join().unwrap().stdout_lossy(), format!("{i}\n"));
     }
+}
+
+#[test]
+fn command_builder_reaches_the_remote_shell() {
+    let s = connect();
+    let built = s
+        .command("sh")
+        .arg("-c")
+        .args(["printf %s \"$KEEP:$(pwd)\""])
+        .env("OLD", "x")
+        .env_remove("DROP")
+        .env_clear()
+        .envs([("KEEP", "yes")])
+        .current_dir("/tmp")
+        .stdin(Stdio::Null)
+        .stdout(Stdio::Piped)
+        .stderr(Stdio::Null)
+        .pty(true)
+        .pty_config(PtyConfig {
+            term: "dumb".into(),
+            cols: 20,
+            rows: 5,
+        })
+        .user("root")
+        .as_login_user();
+    let _ = format!("{built:?}");
+    assert_eq!(built.as_inner().get_program(), "sh");
+    assert_eq!(built.as_inner().get_current_dir(), Some("/tmp"));
+    let inner = built.clone().into_inner();
+    assert!(matches!(inner.get_user(), CommandUser::LoginUser));
+    assert_eq!(inner.get_pty().map(|p| p.term.as_str()), Some("dumb"));
+    let out = built.output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout_lossy().contains("yes:/tmp"), "{out:?}");
+    let status = s.command("true").stdin(Stdio::Inherit).status().unwrap();
+    assert!(status.success());
 }
 
 use std::io::Seek;

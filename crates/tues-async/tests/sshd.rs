@@ -8,8 +8,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tues_async::Session;
 use tues_core::password::{PasswordManager, PasswordRequest};
 use tues_core::{
-    ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, OpenOptions, SecretString,
-    SshConfig, SshConfigSource, StaticPasswordManager, Stdio, SudoError, shared,
+    CommandUser, ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, OpenOptions,
+    PtyConfig, SecretString, SshConfig, SshConfigSource, StaticPasswordManager, Stdio, SudoError,
+    shared,
 };
 use tues_testsupport::{NOPASSWD_USER, PASSWORD, USER, sshd};
 
@@ -688,4 +689,45 @@ async fn closed_session_errors() {
     s.close().await.unwrap();
     let err = s.command("true").output().await.expect_err("closed");
     assert!(matches!(err, Error::Disconnected), "{err}");
+}
+
+#[tokio::test]
+async fn command_builder_reaches_the_remote_shell() {
+    let s = connect().await;
+    let built = s
+        .command("sh")
+        .arg("-c")
+        .args(["printf %s \"$KEEP:$(pwd)\""])
+        .env("OLD", "x")
+        .env_remove("DROP")
+        .env_clear()
+        .envs([("KEEP", "yes")])
+        .current_dir("/tmp")
+        .stdin(Stdio::Null)
+        .stdout(Stdio::Piped)
+        .stderr(Stdio::Null)
+        .pty(true)
+        .pty_config(PtyConfig {
+            term: "dumb".into(),
+            cols: 20,
+            rows: 5,
+        })
+        .user("root")
+        .as_login_user();
+    let _ = format!("{built:?}");
+    assert_eq!(built.as_inner().get_program(), "sh");
+    assert_eq!(built.as_inner().get_current_dir(), Some("/tmp"));
+    let inner = built.clone().into_inner();
+    assert!(matches!(inner.get_user(), CommandUser::LoginUser));
+    assert_eq!(inner.get_pty().map(|p| p.term.as_str()), Some("dumb"));
+    let out = built.output().await.unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout_lossy().contains("yes:/tmp"), "{out:?}");
+    let status = s
+        .command("true")
+        .stdin(Stdio::Inherit)
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success());
 }
