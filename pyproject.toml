@@ -21,10 +21,14 @@ Repository = "https://github.com/mvb/tues-rs"
 tues = "tues.__main__:main"
 
 [dependency-groups]
-dev = ["maturin>=1.7,<2.0", "pytest>=8", "testcontainers>=4.10,<5"]
+dev = ["maturin>=1.7,<2.0", "pytest>=8", "coverage>=7", "testcontainers>=4.10,<5"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+
+[tool.coverage.run]
+source = ["python/tues"]
+parallel = true
 
 [tool.maturin]
 python-source = "python"

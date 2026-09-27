@@ -550,21 +550,23 @@ so uploads and downloads run as the command user rather than the login user.
 ## Development
 
 Requirements: Rust 1.90+, Docker (for the integration tests), Python 3.9+ with
-[`uv`](https://docs.astral.sh/uv/) or `maturin` (for the Python package).
+[`uv`](https://docs.astral.sh/uv/), and [`just`](https://github.com/casey/just).
 
 ```sh
-cargo test --workspace                       # unit + Docker sshd integration tests
-cargo clippy --workspace --all-targets
+uv venv && source .venv/bin/activate
+uv pip install maturin pytest coverage 'testcontainers>=4.10'
+maturin develop --release
 
-# Source coverage for the Rust tests (HTML report: target/llvm-cov/html).
+cargo test --workspace                       # Rust tests and the pytest suite
+cargo clippy --workspace --all-targets
+pytest                                       # Python tests only
+
+# Per-file coverage for the Rust crates and python/tues.
 # One-time setup: rustup component add llvm-tools-preview
 #                 cargo install cargo-llvm-cov --locked
-cargo coverage
+just test
 
-uv venv && source .venv/bin/activate
-uv pip install maturin pytest 'testcontainers>=4.10'
-maturin develop --release
-pytest                                       # Python tests, also against Docker sshd
+cargo coverage                               # HTML report: target/llvm-cov/html
 ```
 
 ## Release
@@ -578,9 +580,17 @@ built, and `dist/stable` points at the newest tagged release. The tag is not
 pushed and the artifacts are not uploaded.
 
 ```sh
-scripts/release 0.2.0
+just release 0.2.0
 git push origin HEAD v0.2.0
 twine upload --repository-url "$TUES_PYPI_URL" dist/stable/*
+```
+
+`just release` calls `scripts/release` with the version. Further arguments are
+passed through:
+
+```sh
+just release 0.2.0 --dry-run
+just release 0.2.0 --python 3.12
 ```
 
 By default that is Python 3.9, 3.11, 3.12 and 3.13. The build runs in the
@@ -594,9 +604,12 @@ built first and the wheels are built from it. Change the set with
 version it starts from the workspace version:
 
 ```sh
-scripts/release --preview
+just preview
 # 0.1.0.post1.dev1+mvb.20260927.2dcc43d
 ```
+
+`just preview` calls `scripts/release --preview`. A version and other flags are
+passed through (`just preview 0.2.0 --dry-run`).
 
 The local part is `$USER`, the UTC date `YYYYMMDD`, and the short commit
 hash. Nothing is committed; `Cargo.toml` and `Cargo.lock` are restored after

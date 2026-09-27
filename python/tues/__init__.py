@@ -37,6 +37,37 @@ process running on another machine:
   the session default.
 """
 
+from __future__ import annotations
+
+import os
+import sys
+
+
+def _load_cargo_extension() -> None:
+    """Load the cdylib ``cargo test`` just built when ``TUES_EXTENSION`` is set.
+
+    Cargo writes ``lib_tues.so`` into its target directory. Installing that
+    file in ``sys.modules`` before the ``from ._tues`` imports below makes this
+    process, and ``python -m tues``, use that build.
+    """
+    path = os.environ.get("TUES_EXTENSION")
+    if not path or "tues._tues" in sys.modules:
+        return
+    import importlib.machinery
+    import importlib.util
+
+    name = "tues._tues"
+    loader = importlib.machinery.ExtensionFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(name, loader)
+    if spec is None:
+        raise ImportError(f"cannot load extension {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    loader.exec_module(module)
+
+
+_load_cargo_extension()
+
 from ._aio import AsyncSession, Process, StdinWriter
 from ._common import (
     DEVNULL,

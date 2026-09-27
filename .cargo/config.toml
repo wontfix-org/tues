@@ -1,8 +1,12 @@
+[env]
+# Pytest runs on .venv. Build the extension with that interpreter, so a
+# newer python3 on PATH cannot produce a cdylib the venv cannot load.
+PYO3_PYTHON = { value = ".venv/bin/python", relative = true }
+
 [alias]
-# Run the Rust tests with LLVM source coverage and write an HTML report to
-# target/llvm-cov/html. Needs the llvm-tools-preview rustup component and
-# cargo-llvm-cov (`cargo install cargo-llvm-cov --locked`).
-#
-# tues-python is left out: it is a PyO3 cdylib exercised by pytest, not by
-# `cargo test`.
-coverage = "llvm-cov --workspace --exclude tues-python --all-targets --html"
+# HTML report at target/llvm-cov/html, including the Python extension.
+# `cargo test` runs pytest, which loads the instrumented cdylib.
+# `just test` prints per-file percentages for the Rust crates and python/tues.
+# Needs the llvm-tools-preview rustup component and cargo-llvm-cov
+# (`cargo install cargo-llvm-cov --locked`).
+coverage = "llvm-cov --workspace --all-targets --html"

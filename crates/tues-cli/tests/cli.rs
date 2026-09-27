@@ -510,14 +510,14 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
     let f = sshd();
     let dir = script_dir("defaults");
     std::fs::write(
-        dir.join("who"),
+        dir.join("who-defaults"),
         "#!/bin/sh\n# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": false}\nid -un\n",
     )
     .unwrap();
     let out = tues()
         .env("TUES_PATH", &dir)
         .arg("-s")
-        .arg("who")
+        .arg("who-defaults")
         .arg("cl")
         .arg(&f.host)
         .arg(&f.host)
@@ -531,14 +531,14 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "root\nroot\n");
 
     std::fs::write(
-        dir.join("who"),
+        dir.join("who-defaults"),
         "#!/bin/sh\n# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": true}\nid -un\n",
     )
     .unwrap();
     let out = tues()
         .env("TUES_PATH", &dir)
         .arg("-s")
-        .arg("who")
+        .arg("who-defaults")
         .arg("cl")
         .arg(&f.host)
         .output()
@@ -560,7 +560,7 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
         .arg("--pty")
         .arg("--no-prefix")
         .arg("-s")
-        .arg("who")
+        .arg("who-defaults")
         .arg("cl")
         .arg(&f.host)
         .output()
@@ -579,14 +579,14 @@ fn script_header_below_code_is_ignored() {
     let f = sshd();
     let dir = script_dir("late");
     std::fs::write(
-        dir.join("who"),
+        dir.join("who-late"),
         "#!/bin/sh\nid -un\n# tues-args = {\"user\": \"root\", \"pty\": false}\n",
     )
     .unwrap();
     let out = tues()
         .env("TUES_PATH", &dir)
         .arg("-s")
-        .arg("who")
+        .arg("who-late")
         .arg("cl")
         .arg(&f.host)
         .output()

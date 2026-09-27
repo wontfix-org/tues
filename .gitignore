@@ -6,3 +6,5 @@ __pycache__/
 *.so
 *.egg-info/
 /.pytest_cache
+.coverage
+.coverage.*
