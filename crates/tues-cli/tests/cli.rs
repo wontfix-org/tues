@@ -441,3 +441,187 @@ fn external_provider_failure_is_reported() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn script_dir(label: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("tues-cli-script-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn script_is_uploaded_with_its_arguments_and_removed() {
+    let f = sshd();
+    let dir = script_dir("run");
+    let name = format!("tues-scr-{}", std::process::id());
+    std::fs::write(
+        dir.join(&name),
+        "#!/bin/sh\n# tues-args = {\"pty\": false}\nprintf '%s\\n' \"$@\"\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("--script")
+        .arg(format!("{name} --my-option 'a b'"))
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "--my-option\na b\n");
+
+    let out = tues()
+        .arg("--no-pty")
+        .arg(format!("test ! -e {name}"))
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
+    let f = sshd();
+    let dir = script_dir("defaults");
+    std::fs::write(
+        dir.join("who"),
+        "#!/bin/sh\n# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": false}\nid -un\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("who")
+        .arg("cl")
+        .arg(&f.host)
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "root\nroot\n");
+
+    std::fs::write(
+        dir.join("who"),
+        "#!/bin/sh\n# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": true}\nid -un\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("who")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("{}: root\n", f.host)
+    );
+
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-u")
+        .arg(USER)
+        .arg("--pty")
+        .arg("--no-prefix")
+        .arg("-s")
+        .arg("who")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\r\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn script_header_below_code_is_ignored() {
+    let f = sshd();
+    let dir = script_dir("late");
+    std::fs::write(
+        dir.join("who"),
+        "#!/bin/sh\nid -un\n# tues-args = {\"user\": \"root\", \"pty\": false}\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("who")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\r\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_or_invalid_script_is_an_error() {
+    let out = tues_bin()
+        .env_remove("TUES_PATH")
+        .arg("-s")
+        .arg("nope")
+        .arg("cl")
+        .arg("h")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("TUES_PATH is not set"), "{stderr}");
+
+    let dir = script_dir("missing");
+    let out = tues_bin()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("nope")
+        .arg("cl")
+        .arg("h")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nope: not found on TUES_PATH"), "{stderr}");
+
+    std::fs::write(dir.join("bad"), "# tues-args = {nope}\n").unwrap();
+    let out = tues_bin()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("bad")
+        .arg("cl")
+        .arg("h")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("invalid tues-args JSON"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

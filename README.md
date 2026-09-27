@@ -43,7 +43,7 @@ Key points:
 ## Command line
 
 ```text
-tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...
+tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
@@ -62,11 +62,12 @@ tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...
       --password-env <VAR>   Take passwords from this environment variable
       --connect-timeout <S>  Connection timeout in seconds
       --no-prefix            Do not prefix output lines with the host name
+  -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
       --show-hosts           Print the hosts on stderr, then run the command
   -v, --verbose...           Verbose logging
 ```
 
-The provider, named after the command, supplies the hosts. `cl` takes them as
+The provider, the positional after the command or `--script`, supplies the hosts. `cl` takes them as
 the remaining arguments. `file` reads them from files, one host per line, and
 `-` reads stdin. Any other name runs `tues-provider-<name>` from `PATH`, with
 the remaining arguments and options passed through, and reads the same
@@ -94,7 +95,29 @@ tues --show-hosts 'uptime' netbox --site nyc
 # Upload first. `deploy.sh` lands in the remote working directory and is
 # removed afterwards; `app.conf` is kept at its destination.
 tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' cl web01
+
+# A script from TUES_PATH (colon-separated, like PATH). It is uploaded, run
+# as ./my-script, and removed. Arguments are quoted inside the option value.
+TUES_PATH=./scripts tues -s "my-script --my-option arg" cl web01
 ```
+
+`--script` looks the script up on `TUES_PATH`. A name that contains a `/` is a
+file path and is not searched. The script is uploaded to each host, executed,
+and deleted afterwards, like a temporary `--file`.
+
+A text script (not a binary) may set defaults in its top comment block. The
+line is a `#` or `//` comment, whitespace around `tues-args` and `=` does not
+matter, and only that first block is read:
+
+```sh
+#!/bin/sh
+# tues-args = {"user": "root", "pty": false, "prefix": true}
+```
+
+`user` is the sudo user, `pty` requests a pseudo-terminal, and `prefix` labels
+each output line with the host (`true` always, `false` never; omit it to
+prefix only when several hosts are selected). `--user`, `--pty` / `--no-pty`,
+and `--no-prefix` override the header.
 
 `--file SRC` uploads a file or directory (recursively) into the remote working
 directory under its own name and deletes it once the command has finished.

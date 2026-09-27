@@ -1,7 +1,7 @@
 //! `tues` — run a command on many hosts over SSH, optionally via sudo.
 //!
 //! ```text
-//! tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...
+//! tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
 //! ```
 //!
 //! The provider decides which hosts to connect to. `cl` takes them as
@@ -9,6 +9,10 @@
 //! other name runs `tues-provider-<name>` from `PATH`. Options that appear
 //! before the command belong to tues; everything after the provider name is
 //! passed to the provider.
+//!
+//! `--script` replaces the remote command. The script is found on `TUES_PATH`,
+//! uploaded, run, and removed. A text script can set `user`, `pty`, and
+//! `prefix` defaults in a `tues-args` line in its top comment block.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -53,7 +57,7 @@ impl From<HostKeyCheck> for HostKeyPolicy {
     version,
     about,
     long_about = None,
-    override_usage = "tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...",
+    override_usage = "tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...",
     after_help = "\
 Providers:
   cl       remaining arguments are hosts
@@ -138,6 +142,19 @@ struct Cli {
     #[arg(long)]
     no_prefix: bool,
 
+    /// Run a script from `TUES_PATH` instead of a remote command.
+    ///
+    /// `SPEC` is a shell-quoted command: the first word is the script name
+    /// (looked up like `PATH`) and the rest are its arguments. Example:
+    /// `--script "my-script --my-option arg"` uploads `my-script`, runs
+    /// `./my-script --my-option arg`, and removes it afterwards.
+    ///
+    /// A text script may set defaults in its top comment block:
+    /// `# tues-args = {"user": "root", "pty": false, "prefix": true}`.
+    /// `--user`, `--pty` / `--no-pty`, and `--no-prefix` override those.
+    #[arg(short = 's', long, value_name = "SPEC")]
+    script: Option<String>,
+
     /// Verbose logging (repeat for more).
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -205,6 +222,26 @@ impl FileSpec {
     fn is_temporary(&self) -> bool {
         self.dst.is_none()
     }
+}
+
+/// What one invocation runs on each host, after `--script` defaults are applied.
+#[derive(Debug, Clone)]
+struct Run {
+    command: String,
+    /// Temporary upload of the `--script` file. `None` for a plain command.
+    script: Option<FileSpec>,
+    user: Option<String>,
+    pty: bool,
+    /// `None` means prefix only when more than one host is selected.
+    prefix: Option<bool>,
+}
+
+/// Defaults read from a script's `tues-args` header.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ScriptDefaults {
+    user: Option<String>,
+    pty: Option<bool>,
+    prefix: Option<bool>,
 }
 
 /// Prompts once per (kind, login user) and reuses the answer across hosts, since a
@@ -292,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.fail_fast() && jobs != 1 {
         anyhow::bail!("--check only works with one job at a time");
     }
+    let run = prepare_run(&cli)?;
     let hosts = resolve_hosts(&cli)?;
     if cli.show_hosts {
         let noun = if hosts.len() == 1 { "host" } else { "hosts" };
@@ -301,7 +339,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let multi = hosts.len() > 1;
-    let prefix = multi && !cli.no_prefix;
+    let prefix = run.prefix.unwrap_or(multi);
+    let run = Arc::new(run);
     let sem = Arc::new(Semaphore::new(jobs));
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let stderr = Arc::new(Mutex::new(tokio::io::stderr()));
@@ -312,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         for server in &hosts {
             let outcome = run_host(
                 &cli,
+                &run,
                 server,
                 password_manager.clone(),
                 prefix,
@@ -330,12 +370,13 @@ async fn main() -> anyhow::Result<()> {
     for server in hosts {
         let sem = sem.clone();
         let cli = cli.clone();
+        let run = run.clone();
         let pm = password_manager.clone();
         let stdout = stdout.clone();
         let stderr = stderr.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.expect("semaphore");
-            let outcome = run_host(&cli, &server, pm, prefix, stdout, stderr).await;
+            let outcome = run_host(&cli, &run, &server, pm, prefix, stdout, stderr).await;
             HostResult { server, outcome }
         }));
     }
@@ -378,11 +419,6 @@ fn note_failure(
 }
 
 impl Cli {
-    /// The remote shell command.
-    fn command(&self) -> &str {
-        &self.args[0]
-    }
-
     /// A PTY is allocated unless `--no-pty` was given last.
     fn use_pty(&self) -> bool {
         self.pty || !self.no_pty
@@ -394,12 +430,9 @@ impl Cli {
     }
 }
 
-/// Hosts from the provider named after the command.
+/// Hosts from the provider named after the command (or after `--script`).
 fn resolve_hosts(cli: &Cli) -> anyhow::Result<Vec<String>> {
-    let Some(provider) = cli.args.get(1).map(String::as_str) else {
-        anyhow::bail!("a provider is required after the command (`cl`, `file`, or a name)");
-    };
-    let pargs = cli.args.get(2..).unwrap_or(&[]);
+    let (provider, pargs) = provider_args(cli)?;
     let hosts = match provider {
         "cl" => pargs.iter().filter(|h| !h.is_empty()).cloned().collect(),
         "file" => hosts_from_files(pargs)?,
@@ -513,6 +546,7 @@ fn connect_options(
     cli: &Cli,
     server: &str,
     pm: tues_core::SharedPasswordManager,
+    user: Option<&str>,
 ) -> ConnectOptions {
     let mut o = ConnectOptions::new(server).password_manager(pm);
     if let Some(u) = &cli.login_user {
@@ -538,24 +572,351 @@ fn connect_options(
     if let Some(t) = cli.connect_timeout {
         o = o.connect_timeout(Duration::from_secs(t));
     }
-    if let Some(u) = &cli.user {
-        o = o.user(u.clone());
+    if let Some(u) = user {
+        o = o.user(u.to_string());
     }
     o
 }
 
+/// Provider token and the arguments that belong to it.
+///
+/// With `--script` the remote command is not a positional, so the provider is
+/// the first one.
+fn provider_args(cli: &Cli) -> anyhow::Result<(&str, &[String])> {
+    let (provider_at, missing) = if cli.script.is_some() {
+        (
+            0,
+            "a provider is required after --script (`cl`, `file`, or a name)",
+        )
+    } else {
+        (
+            1,
+            "a provider is required after the command (`cl`, `file`, or a name)",
+        )
+    };
+    let Some(provider) = cli.args.get(provider_at).map(String::as_str) else {
+        anyhow::bail!("{missing}");
+    };
+    Ok((provider, cli.args.get(provider_at + 1..).unwrap_or(&[])))
+}
+
+fn prepare_run(cli: &Cli) -> anyhow::Result<Run> {
+    let Some(spec) = cli.script.as_deref() else {
+        let Some(command) = cli.args.first() else {
+            anyhow::bail!("a command is required");
+        };
+        return Ok(Run {
+            command: command.clone(),
+            script: None,
+            user: cli.user.clone(),
+            pty: cli.use_pty(),
+            prefix: cli.no_prefix.then_some(false),
+        });
+    };
+    let resolved = resolve_script(spec)?;
+    let (user, pty, prefix) = effective_settings(cli, &resolved.defaults);
+    Ok(Run {
+        command: resolved.command,
+        script: Some(resolved.file),
+        user,
+        pty,
+        prefix,
+    })
+}
+
+/// Command-line flags win. Unset flags keep the script header, and unset
+/// header fields keep the usual defaults (pty on, prefix when there are
+/// several hosts).
+fn effective_settings(
+    cli: &Cli,
+    defaults: &ScriptDefaults,
+) -> (Option<String>, bool, Option<bool>) {
+    let user = cli.user.clone().or_else(|| defaults.user.clone());
+    let pty = if cli.pty || cli.no_pty {
+        cli.use_pty()
+    } else {
+        defaults.pty.unwrap_or(true)
+    };
+    let prefix = if cli.no_prefix {
+        Some(false)
+    } else {
+        defaults.prefix
+    };
+    (user, pty, prefix)
+}
+
+struct ResolvedScript {
+    file: FileSpec,
+    command: String,
+    defaults: ScriptDefaults,
+}
+
+fn resolve_script(spec: &str) -> anyhow::Result<ResolvedScript> {
+    let (name, args) = split_script_spec(spec)?;
+    let path = lookup_script(&name)?;
+    let remote_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("{}: cannot derive a file name", path.display()))?;
+    if remote_name == "." || remote_name == ".." {
+        anyhow::bail!("{name}: cannot derive a file name");
+    }
+    let defaults = load_script_defaults(&path)?;
+    let command = script_command(&remote_name, &args);
+    Ok(ResolvedScript {
+        file: FileSpec {
+            src: path,
+            name: remote_name,
+            dst: None,
+        },
+        command,
+        defaults,
+    })
+}
+
+/// `chmod` so `./name` can run, then the script and the arguments from `SPEC`.
+fn script_command(name: &str, args: &[String]) -> String {
+    let path = format!("./{name}");
+    let mut words = Vec::with_capacity(args.len() + 1);
+    words.push(path.clone());
+    words.extend(args.iter().cloned());
+    format!(
+        "chmod u+x {} && {}",
+        tues_core::shell::quote(&path),
+        tues_core::shell::join(words)
+    )
+}
+
+fn split_script_spec(spec: &str) -> anyhow::Result<(String, Vec<String>)> {
+    let mut words = split_words(spec)?;
+    if words.is_empty() {
+        anyhow::bail!("empty --script");
+    }
+    let name = words.remove(0);
+    if name.is_empty() {
+        anyhow::bail!("empty script name");
+    }
+    Ok((name, words))
+}
+
+/// Split `SPEC` into words. Single and double quotes group a word; a backslash
+/// escapes the next character outside quotes, and inside double quotes it
+/// escapes `$`, `` ` ``, `"`, `\`, and newline.
+fn split_words(spec: &str) -> anyhow::Result<Vec<String>> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut chars = spec.chars().peekable();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if c == '\'' {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+                in_word = true;
+            }
+            Some('"') => {
+                if c == '\\' {
+                    match chars.next() {
+                        Some(next @ ('$' | '`' | '"' | '\\' | '\n')) => cur.push(next),
+                        Some(next) => {
+                            cur.push('\\');
+                            cur.push(next);
+                        }
+                        None => anyhow::bail!("trailing backslash in --script"),
+                    }
+                } else if c == '"' {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+                in_word = true;
+            }
+            Some(_) => unreachable!("only ' and \" open a quote"),
+            None => match c {
+                ' ' | '\t' | '\n' | '\r' => {
+                    if in_word {
+                        words.push(std::mem::take(&mut cur));
+                        in_word = false;
+                    }
+                }
+                '\'' | '"' => quote = Some(c),
+                '\\' => match chars.next() {
+                    Some(next) => {
+                        cur.push(next);
+                        in_word = true;
+                    }
+                    None => anyhow::bail!("trailing backslash in --script"),
+                },
+                c => {
+                    cur.push(c);
+                    in_word = true;
+                }
+            },
+        }
+    }
+    if quote.is_some() {
+        anyhow::bail!("unclosed quote in --script");
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Ok(words)
+}
+
+fn lookup_script(name: &str) -> anyhow::Result<PathBuf> {
+    if name.contains('/') || name.contains('\\') {
+        let path = PathBuf::from(name);
+        if path.is_file() {
+            return Ok(path);
+        }
+        anyhow::bail!("{}: not a file", path.display());
+    }
+    let Some(path_var) = std::env::var_os("TUES_PATH") else {
+        anyhow::bail!("TUES_PATH is not set");
+    };
+    find_file(&path_var, name).ok_or_else(|| anyhow::anyhow!("{name}: not found on TUES_PATH"))
+}
+
+/// First regular file named `name` on a `PATH`-style list.
+fn find_file(path_var: &OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path_var).find_map(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+fn load_script_defaults(path: &Path) -> anyhow::Result<ScriptDefaults> {
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut buf = Vec::new();
+    file.by_ref()
+        .take(64 * 1024)
+        .read_to_end(&mut buf)
+        .with_context(|| format!("reading {}", path.display()))?;
+    // A NUL means a binary: run it, but do not look for a header.
+    if buf.contains(&0) {
+        return Ok(ScriptDefaults::default());
+    }
+    let text = std::str::from_utf8(&buf)
+        .with_context(|| format!("{}: script header is not utf-8", path.display()))?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    match header_json(text)? {
+        Some(json) => {
+            parse_tues_args(json).with_context(|| format!("{}: tues-args", path.display()))
+        }
+        None => Ok(ScriptDefaults::default()),
+    }
+}
+
+/// JSON after `tues-args =` in the first comment block, if that line exists.
+fn header_json(text: &str) -> anyhow::Result<Option<&str>> {
+    let mut in_block = false;
+    let mut found = None;
+    for line in text.lines() {
+        if let Some(body) = comment_body(line) {
+            in_block = true;
+            if let Some(json) = tues_args_value(body) {
+                if found.is_some() {
+                    anyhow::bail!("multiple tues-args lines in the script header");
+                }
+                found = Some(json);
+            }
+        } else if line.trim().is_empty() {
+            if in_block {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    Ok(found)
+}
+
+/// Body of a `#` or `//` comment line, after the marker.
+fn comment_body(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    trimmed
+        .strip_prefix("//")
+        .or_else(|| trimmed.strip_prefix('#'))
+}
+
+/// Text after `tues-args =`, ignoring whitespace around the key and the sign.
+fn tues_args_value(body: &str) -> Option<&str> {
+    let rest = body.trim().strip_prefix("tues-args")?.trim_start();
+    Some(rest.strip_prefix('=')?.trim())
+}
+
+fn parse_tues_args(json: &str) -> anyhow::Result<ScriptDefaults> {
+    let value: serde_json::Value = serde_json::from_str(json).context("invalid tues-args JSON")?;
+    let obj = value
+        .as_object()
+        .context("tues-args must be a JSON object")?;
+    let mut defaults = ScriptDefaults::default();
+    for (key, value) in obj {
+        match key.as_str() {
+            "user" => {
+                let Some(user) = value.as_str() else {
+                    anyhow::bail!("tues-args user must be a string");
+                };
+                if user.is_empty() {
+                    anyhow::bail!("tues-args user must not be empty");
+                }
+                defaults.user = Some(user.to_string());
+            }
+            "pty" => {
+                let Some(pty) = value.as_bool() else {
+                    anyhow::bail!("tues-args pty must be a boolean");
+                };
+                defaults.pty = Some(pty);
+            }
+            "prefix" => {
+                let Some(prefix) = value.as_bool() else {
+                    anyhow::bail!("tues-args prefix must be a boolean");
+                };
+                defaults.prefix = Some(prefix);
+            }
+            other => anyhow::bail!("unknown tues-args key: {other}"),
+        }
+    }
+    Ok(defaults)
+}
+
 async fn run_host(
     cli: &Cli,
+    run: &Run,
     server: &str,
     pm: tues_core::SharedPasswordManager,
     prefix: bool,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
-    let session = Session::connect(connect_options(cli, server, pm)).await?;
+    let session = Session::connect(connect_options(cli, server, pm, run.user.as_deref())).await?;
     let mut temporary = Vec::new();
-    let result = match upload_files(&session, &cli.files, &mut temporary).await {
-        Ok(()) => run_command(cli, &session, server, prefix, stdout, stderr).await,
+    let uploaded = match upload_files(&session, &cli.files, &mut temporary).await {
+        Ok(()) => match &run.script {
+            Some(spec) => upload_files(&session, std::slice::from_ref(spec), &mut temporary).await,
+            None => Ok(()),
+        },
+        Err(e) => Err(e),
+    };
+    let result = match uploaded {
+        Ok(()) => {
+            run_command(
+                &run.command,
+                run.pty,
+                &session,
+                server,
+                prefix,
+                stdout,
+                stderr,
+            )
+            .await
+        }
         Err(e) => Err(e),
     };
     for path in temporary {
@@ -595,17 +956,15 @@ async fn upload_files(
 }
 
 async fn run_command(
-    cli: &Cli,
+    command: &str,
+    pty: bool,
     session: &Session,
     server: &str,
     prefix: bool,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
-    let mut cmd = session
-        .shell(cli.command())
-        .pty(cli.use_pty())
-        .stdin(Stdio::Null);
+    let mut cmd = session.shell(command).pty(pty).stdin(Stdio::Null);
 
     if prefix {
         cmd = cmd.stdout(Stdio::Piped).stderr(Stdio::Piped);
@@ -727,7 +1086,7 @@ mod tests {
         .unwrap();
         assert!(cli.show_hosts);
         assert!(!cli.use_pty());
-        assert_eq!(cli.command(), "echo hi");
+        assert_eq!(cli.args[0], "echo hi");
         assert_eq!(
             cli.args,
             vec![
@@ -760,5 +1119,137 @@ mod tests {
         );
         assert!(super::find_executable(path, "tues-provider-missing").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn script_spec_splits_quoted_words() {
+        let (name, args) = super::split_script_spec("my-script --my-option arg").unwrap();
+        assert_eq!(name, "my-script");
+        assert_eq!(args, ["--my-option", "arg"]);
+
+        let (name, args) = super::split_script_spec("my-script --opt \"a b\" 'c d' e\\ f").unwrap();
+        assert_eq!(name, "my-script");
+        assert_eq!(args, ["--opt", "a b", "c d", "e f"]);
+
+        assert!(super::split_script_spec("my-script 'unterminated").is_err());
+        assert!(super::split_script_spec("   ").is_err());
+    }
+
+    #[test]
+    fn script_header_is_only_the_top_comment_block() {
+        let text = "\
+#!/bin/sh
+# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": true}
+
+# tues-args = {\"user\": \"other\"}
+echo hi
+";
+        let defaults = super::parse_tues_args(super::header_json(text).unwrap().unwrap()).unwrap();
+        assert_eq!(defaults.user.as_deref(), Some("root"));
+        assert_eq!(defaults.pty, Some(false));
+        assert_eq!(defaults.prefix, Some(true));
+
+        let loose = "#\ttues-args\t=\t{\"pty\": false}\n";
+        let defaults = super::parse_tues_args(super::header_json(loose).unwrap().unwrap()).unwrap();
+        assert_eq!(defaults.pty, Some(false));
+
+        let slash = "// tues-args={\"user\":\"bob\"}\ncode\n";
+        let defaults = super::parse_tues_args(super::header_json(slash).unwrap().unwrap()).unwrap();
+        assert_eq!(defaults.user.as_deref(), Some("bob"));
+
+        let after = "#!/bin/sh\necho hi\n# tues-args = {\"user\": \"root\"}\n";
+        assert_eq!(super::header_json(after).unwrap(), None);
+
+        let note = "# note tues-args = {\"user\": \"root\"}\n";
+        assert_eq!(super::header_json(note).unwrap(), None);
+
+        assert!(super::header_json("# tues-args = {}\n# tues-args = {}\n").is_err());
+        assert!(super::parse_tues_args("{\"user\": 1}").is_err());
+        assert!(super::parse_tues_args("{\"nope\": true}").is_err());
+    }
+
+    #[test]
+    fn binary_script_skips_the_header() {
+        let dir = std::env::temp_dir().join(format!("tues-script-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tool");
+        let mut bytes = b"\0ELF".to_vec();
+        bytes.extend(b"\n# tues-args = {\"user\": \"root\"}\n");
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            super::load_script_defaults(&path).unwrap(),
+            super::ScriptDefaults::default()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tues_path_finds_the_first_matching_file() {
+        let root = std::env::temp_dir().join(format!("tues-script-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let first = root.join("a");
+        let second = root.join("b");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("tool"), b"first\n").unwrap();
+        std::fs::write(second.join("tool"), b"second\n").unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(
+            super::find_file(&path, "tool").as_deref(),
+            Some(first.join("tool").as_path())
+        );
+        assert!(super::find_file(&path, "missing").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn script_command_runs_the_uploaded_name() {
+        assert_eq!(
+            super::script_command("my-script", &["--my-option".into(), "arg".into()]),
+            "chmod u+x ./my-script && ./my-script --my-option arg"
+        );
+        assert_eq!(
+            super::script_command("my-script", &["a b".into()]),
+            "chmod u+x ./my-script && ./my-script 'a b'"
+        );
+    }
+
+    #[test]
+    fn command_line_overrides_script_defaults() {
+        let defaults = super::ScriptDefaults {
+            user: Some("root".into()),
+            pty: Some(true),
+            prefix: Some(true),
+        };
+        let cli = super::Cli::try_parse_from([
+            "tues",
+            "-u",
+            "alice",
+            "--no-pty",
+            "--no-prefix",
+            "-s",
+            "tool",
+            "cl",
+            "h",
+        ])
+        .unwrap();
+        let (user, pty, prefix) = super::effective_settings(&cli, &defaults);
+        assert_eq!(user.as_deref(), Some("alice"));
+        assert!(!pty);
+        assert_eq!(prefix, Some(false));
+
+        let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "h"]).unwrap();
+        let (user, pty, prefix) = super::effective_settings(&cli, &defaults);
+        assert_eq!(user.as_deref(), Some("root"));
+        assert!(pty);
+        assert_eq!(prefix, Some(true));
+
+        let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "h"]).unwrap();
+        let (user, pty, prefix) =
+            super::effective_settings(&cli, &super::ScriptDefaults::default());
+        assert_eq!(user, None);
+        assert!(pty);
+        assert_eq!(prefix, None);
     }
 }
