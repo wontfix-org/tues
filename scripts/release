@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [--dry-run] [--python 3.9,3.11,3.12,3.13] VERSION
+Usage: scripts/release [--dry-run] [--preview] [--python 3.9,3.11,3.12,3.13] [VERSION]
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). The script commits the version bump, creates an annotated tag
 vVERSION, and writes a release sdist plus one wheel per configured CPython
 to dist/. It does not push the tag or upload the files.
+
+--preview builds VERSION.post1.dev1+$USER.$ISODATE.$COMMIT instead, from the
+workspace version when VERSION is omitted. That build is not committed or
+tagged, and the manifest is restored afterwards. The manifest itself uses a
+hyphen (`-post1`) because Cargo versions are SemVer; PEP 440 normalizes it
+back to `.post1`. The local part is dot-separated: a second `+` is not a
+legal version character.
 
 The default interpreters are Python 3.9, 3.11, 3.12 and 3.13. Override them
 with --python or TUES_PYTHON_VERSIONS (comma or space separated). Wheels are
@@ -18,11 +25,13 @@ rather than for the host glibc. Docker is required.
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -37,6 +46,7 @@ IMAGE = "ghcr.io/pyo3/maturin:v1.15.0"
 VERSIONED_PATH_DEPS = 5
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z.]+)?$")
+PLAIN_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 PYTHON_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 
 
@@ -53,16 +63,29 @@ def split_versions(text: str) -> List[str]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
-        usage="scripts/release [--dry-run] [--python 3.9,3.11,3.12,3.13] VERSION",
+        usage="scripts/release [--dry-run] [--preview] [--python 3.9,3.11,3.12,3.13] [VERSION]",
         description="Set the workspace version, tag it, and build PyPI artifacts.",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and stop")
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help=(
+            "build VERSION.post1.dev1+$USER.$YYYYMMDD.$COMMIT without committing "
+            "or tagging (VERSION defaults to the workspace version)"
+        ),
+    )
     parser.add_argument(
         "--python",
         metavar="VERSIONS",
         help="CPython releases to build wheels for (comma or space separated)",
     )
-    parser.add_argument("version", metavar="VERSION", help="release version, e.g. 0.2.0")
+    parser.add_argument(
+        "version",
+        nargs="?",
+        metavar="VERSION",
+        help="release version, e.g. 0.2.0; optional with --preview",
+    )
     return parser.parse_args(argv)
 
 
@@ -124,6 +147,36 @@ def rewrite_cargo_toml(old: str, new: str) -> None:
             f"refusing to rewrite Cargo.toml (package={replaced_pkg}, deps={replaced_deps})"
         )
     CARGO_TOML.write_text("".join(out))
+
+
+def preview_version(base: str) -> str:
+    """Cargo spelling of ``base.post1.dev1+user.date.commit``.
+
+    PEP 440 treats ``-post1`` and ``.post1`` as the same public version. The
+    local segments stay dot-separated so the string is one legal version.
+    """
+    if not PLAIN_VERSION_RE.match(base):
+        raise ReleaseError(
+            f"a preview is built from a plain release version, not {base}", code=2
+        )
+    # $USER when the environment has it; otherwise the login name.
+    user = re.sub(r"[^0-9A-Za-z]", "", getpass.getuser())
+    if not user:
+        raise ReleaseError("the user name has no letters or digits", code=2)
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    commit = git("rev-parse", "--short", "HEAD", capture=True).stdout.strip()
+    if not re.fullmatch(r"[0-9a-fA-F]+", commit):
+        raise ReleaseError(f"not a commit hash: {commit}")
+    return f"{base}-post1.dev1+{user}.{today}.{commit}"
+
+
+def published_version(cargo_version: str) -> str:
+    """The PEP 440 spelling of a preview version stored for Cargo."""
+    return cargo_version.replace("-post1.", ".post1.", 1)
+
+
+def restore_manifests() -> None:
+    git("checkout", "--", "Cargo.toml", "Cargo.lock")
 
 
 def tag_exists(tag: str) -> bool:
@@ -205,17 +258,60 @@ def main(argv: Sequence[str]) -> int:
         if not PYTHON_RE.match(py):
             raise ReleaseError(f"not a Python version: {py}", code=2)
 
-    version = args.version[1:] if args.version.startswith("v") else args.version
-    if not VERSION_RE.match(version):
-        raise ReleaseError(f"not a version: {args.version}", code=2)
-    tag = f"v{version}"
+    if args.version is None and not args.preview:
+        raise ReleaseError("a version is required (or pass --preview)", code=2)
+    given = None
+    if args.version is not None:
+        given = args.version[1:] if args.version.startswith("v") else args.version
+        if not VERSION_RE.match(given):
+            raise ReleaseError(f"not a version: {args.version}", code=2)
 
     current = workspace_version()
+    if args.preview:
+        version = preview_version(given if given is not None else current)
+    else:
+        assert given is not None
+        version = given
+    tag = f"v{version}"
 
     if git("status", "--porcelain", capture=True).stdout.strip():
         if not args.dry_run:
             raise ReleaseError("working tree is not clean")
         print("working tree is not clean; a real run would stop here", file=sys.stderr)
+
+    wheels = (
+        f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
+        f"in {IMAGE} and write them to dist/"
+    )
+    if args.preview:
+        if args.dry_run:
+            print(f"would set version {current} -> {published_version(version)} for the build only")
+            print("would not commit or tag, and would restore Cargo.toml and Cargo.lock")
+            print(wheels)
+            return 0
+        print(f"preview {published_version(version)}")
+        rewrite_cargo_toml(current, version)
+        try:
+            refreshed = run(
+                ["cargo", "metadata", "--offline", "--format-version", "1"],
+                capture=True,
+                check=False,
+            )
+            if refreshed.returncode != 0:
+                raise ReleaseError("cargo metadata rejected the preview version")
+            build(pythons)
+        finally:
+            restore_manifests()
+        print()
+        print("Artifacts in dist/:")
+        for artifact in sorted(DIST.iterdir()):
+            print(artifact.name)
+        print()
+        print("The preview version was not committed. Upload the artifacts with:")
+        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/*')
+        print("or:")
+        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/*')
+        return 0
 
     need_commit = False
     need_tag = False
@@ -235,10 +331,7 @@ def main(argv: Sequence[str]) -> int:
             print(f"would tag {tag}")
         else:
             print(f"tag {tag} already exists")
-        print(
-            f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
-            f"in {IMAGE} and write them to dist/"
-        )
+        print(wheels)
         return 0
 
     if need_commit:
@@ -249,7 +342,7 @@ def main(argv: Sequence[str]) -> int:
             check=False,
         )
         if refreshed.returncode != 0:
-            git("checkout", "--", "Cargo.toml", "Cargo.lock")
+            restore_manifests()
             raise ReleaseError("cargo metadata rejected the new version; Cargo.toml restored")
         git("add", "Cargo.toml", "Cargo.lock")
         git("commit", "-m", f"Release {version}.")

@@ -588,6 +588,18 @@ tagged for its interpreter (`cp39`, `cp311`, `cp312`, `cp313`). The sdist is
 built first and the wheels are built from it. Change the set with
 `--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. Docker is required.
 
+`--preview` builds a throwaway version instead of tagging a release. With no
+version it starts from the workspace version:
+
+```sh
+scripts/release --preview
+# 0.1.0.post1.dev1+mvb.20260927.2dcc43d
+```
+
+The local part is `$USER`, the UTC date `YYYYMMDD`, and the short commit
+hash. Nothing is committed; `Cargo.toml` and `Cargo.lock` are restored after
+the wheels are written.
+
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
 ephemeral host port. The Rust tests do this through the `testcontainers` crate;
