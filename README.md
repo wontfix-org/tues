@@ -43,7 +43,7 @@ Key points:
 ## Command line
 
 ```text
-tues [OPTIONS] <COMMAND> <SERVERS>...
+tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
@@ -62,25 +62,38 @@ tues [OPTIONS] <COMMAND> <SERVERS>...
       --password-env <VAR>   Take passwords from this environment variable
       --connect-timeout <S>  Connection timeout in seconds
       --no-prefix            Do not prefix output lines with the host name
+      --show-hosts           Print the hosts on stderr, then run the command
   -v, --verbose...           Verbose logging
 ```
 
-Servers can be `host`, `login-user@host`, `host:port`, `[2001:db8::1]:2222`, or an
+The provider, named after the command, supplies the hosts. `cl` takes them as
+the remaining arguments. `file` reads them from files, one host per line, and
+`-` reads stdin. Any other name runs `tues-provider-<name>` from `PATH`, with
+the remaining arguments and options passed through, and reads the same
+newline-separated list from its stdout. tues options come before the command.
+`--show-hosts` prints the resolved list before connecting; without it the
+command runs directly.
+
+A host is `host`, `login-user@host`, `host:port`, `[2001:db8::1]:2222`, or an
 alias from `~/.ssh/config`.
 
 ```sh
 # Restart a service on three hosts, four at a time, as root.
-tues -l deploy -u root -j 4 'systemctl restart nginx' web01 web02 web03
+tues -l deploy -u root -j 4 'systemctl restart nginx' cl web01 web02 web03
 
 # One host, without a PTY: raw stdout/stderr, the remote exit status becomes ours.
-tues --no-pty 'tar cz /var/log' backup01 > logs.tgz
+tues --no-pty 'tar cz /var/log' cl backup01 > logs.tgz
 
 # Passwords from the environment instead of the terminal.
-TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' db01 db02
+TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' cl db01 db02
+
+# Hosts from a file, and from a provider executable (tues-provider-netbox).
+tues 'uptime' file web.list
+tues --show-hosts 'uptime' netbox --site nyc
 
 # Upload first. `deploy.sh` lands in the remote working directory and is
 # removed afterwards; `app.conf` is kept at its destination.
-tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' web01
+tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' cl web01
 ```
 
 `--file SRC` uploads a file or directory (recursively) into the remote working

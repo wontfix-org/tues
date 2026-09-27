@@ -1,6 +1,8 @@
 //! End-to-end tests of the `tues` binary against the Docker sshd fixture.
 
-use std::process::Command;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::process::{Command, Stdio};
 
 use tues_testsupport::{PASSWORD, USER, sshd};
 
@@ -28,6 +30,7 @@ fn single_host_streams_raw_output_and_exit_code() {
     let out = tues()
         .arg("--no-pty")
         .arg("echo hello; echo oops >&2; exit 3")
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -46,6 +49,7 @@ fn multiple_hosts_with_sudo_and_prefixes() {
         .arg("-u")
         .arg("root")
         .arg("id -un")
+        .arg("cl")
         .arg(&f.host)
         .arg(format!("{}@{}", USER, f.host))
         .arg(format!("{}:{}", f.host, f.port))
@@ -79,6 +83,7 @@ fn failing_host_yields_nonzero_exit() {
     let f = sshd();
     let out = tues()
         .arg("exit 4")
+        .arg("cl")
         .arg(&f.host)
         .arg(&f.host)
         .output()
@@ -96,6 +101,7 @@ fn unreachable_hosts_report_errors_and_ipv6_ports_are_parsed() {
         .arg("--connect-timeout")
         .arg("2")
         .arg("true")
+        .arg("cl")
         .arg(&f.host)
         .arg("127.0.0.1:1")
         .arg("[::1]:1")
@@ -122,6 +128,7 @@ fn check_stops_after_the_first_failure() {
         .arg("--connect-timeout")
         .arg("2")
         .arg("exit 4")
+        .arg("cl")
         .arg(&f.host)
         .arg("127.0.0.1:1")
         .output()
@@ -142,6 +149,7 @@ fn check_rejects_more_than_one_job() {
         .arg("-j")
         .arg("2")
         .arg("true")
+        .arg("cl")
         .arg(&f.host)
         .arg(&f.host)
         .output()
@@ -175,6 +183,7 @@ fn file_uploads_are_temporary_unless_mapped() {
         .arg("--file")
         .arg(format!("{}:{kept}", dir.join("kept").display()))
         .arg(format!("cat tree/sub/x.txt a:b {kept}; pwd"))
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -194,6 +203,7 @@ fn file_uploads_are_temporary_unless_mapped() {
         .arg(format!(
             "test ! -e tree && test ! -e a:b && cat {kept} && rm {kept}"
         ))
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -213,6 +223,7 @@ fn missing_file_upload_fails_before_the_command() {
         .arg("--file")
         .arg("/nonexistent/tues-file")
         .arg("echo ran")
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -230,6 +241,7 @@ fn wrong_sudo_password_is_an_error() {
         .arg("-u")
         .arg("root")
         .arg("id")
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -245,6 +257,7 @@ fn pty_is_the_default_with_sudo() {
         .arg("-u")
         .arg("root")
         .arg("id -un")
+        .arg("cl")
         .arg(&f.host)
         .output()
         .unwrap();
@@ -254,4 +267,177 @@ fn pty_is_the_default_with_sudo() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "root\r\n");
+}
+
+fn tues_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_tues"))
+}
+
+fn write_provider(dir: &std::path::Path, name: &str, body: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(format!("tues-provider-{name}"));
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut path = std::ffi::OsString::from(dir);
+    if let Some(rest) = std::env::var_os("PATH") {
+        path.push(":");
+        path.push(rest);
+    }
+    path
+}
+
+#[test]
+fn file_provider_reads_files_and_stdin_and_show_hosts_prints_them() {
+    let f = sshd();
+    let dir = std::env::temp_dir().join(format!("tues-cli-hosts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let list = dir.join("hosts");
+    std::fs::write(&list, format!("\n{}\n\n", f.host)).unwrap();
+
+    let mut child = tues()
+        .arg("--show-hosts")
+        .arg("--no-pty")
+        .arg("echo ok")
+        .arg("file")
+        .arg(&list)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(format!("{}\n", f.host).as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout, format!("{}: ok\n{}: ok\n", f.host, f.host));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with(&format!("2 hosts:\n{}\n{}\n", f.host, f.host)),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_provider_and_host_file_are_errors() {
+    let out = tues_bin().arg("true").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("a provider is required after the command"),
+        "{stderr}"
+    );
+
+    let out = tues_bin()
+        .arg("true")
+        .arg("file")
+        .arg("/nonexistent/tues-hosts")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("reading hosts from /nonexistent/tues-hosts"),
+        "{stderr}"
+    );
+
+    let out = tues_bin()
+        .arg("true")
+        .arg("file")
+        .arg("-")
+        .arg("-")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("stdin can only be used once"), "{stderr}");
+
+    let out = tues_bin().arg("true").arg("a/b").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not a provider name: a/b"), "{stderr}");
+
+    let out = tues_bin().arg("true").arg("nosuch").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no provider executable tues-provider-nosuch on PATH"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn external_provider_supplies_hosts_and_receives_its_options() {
+    let f = sshd();
+    let dir = std::env::temp_dir().join(format!("tues-cli-provider-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_provider(
+        &dir,
+        "inv",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TUES_PROVIDER_LOG\"\nprintf '%s\\n' \"$TUES_TEST_HOST\"\n",
+    );
+    let log = dir.join("args");
+    let out = tues()
+        .env("PATH", path_with(&dir))
+        .env("TUES_PROVIDER_LOG", &log)
+        .env("TUES_TEST_HOST", &f.host)
+        .arg("--show-hosts")
+        .arg("--no-pty")
+        .arg("echo from-provider")
+        .arg("inv")
+        .arg("--site")
+        .arg("nyc")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "from-provider\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.starts_with(&format!("1 host:\n{}\n", f.host)),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "--site\nnyc\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn external_provider_failure_is_reported() {
+    let dir = std::env::temp_dir().join(format!("tues-cli-provider-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_provider(&dir, "inv", "#!/bin/sh\necho provider broke >&2\nexit 4\n");
+    let out = tues_bin()
+        .env("PATH", path_with(&dir))
+        .arg("true")
+        .arg("inv")
+        .arg("--x")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("provider broke"), "{stderr}");
+    assert!(
+        stderr.contains("tues-provider-inv exited with 4"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

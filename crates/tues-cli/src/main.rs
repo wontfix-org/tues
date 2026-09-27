@@ -1,11 +1,19 @@
 //! `tues` — run a command on many hosts over SSH, optionally via sudo.
 //!
 //! ```text
-//! tues [OPTIONS] <COMMAND> <SERVER>...
+//! tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...
 //! ```
+//!
+//! The provider decides which hosts to connect to. `cl` takes them as
+//! arguments, `file` reads newline-separated files (`-` is stdin), and any
+//! other name runs `tues-provider-<name>` from `PATH`. Options that appear
+//! before the command belong to tues; everything after the provider name is
+//! passed to the provider.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,15 +48,22 @@ impl From<HostKeyCheck> for HostKeyPolicy {
 
 /// Run a command on one or more servers over SSH.
 #[derive(Debug, Parser)]
-#[command(name = "tues", version, about, long_about = None)]
+#[command(
+    name = "tues",
+    version,
+    about,
+    long_about = None,
+    override_usage = "tues [OPTIONS] <COMMAND> <PROVIDER> [ARGS]...",
+    after_help = "\
+Providers:
+  cl       remaining arguments are hosts
+  file     remaining arguments are files of hosts, one per line; - reads stdin
+  <name>   run tues-provider-<name> and read hosts from its stdout
+
+tues options come before the command. Arguments and options after the provider
+name are passed through to that provider."
+)]
 struct Cli {
-    /// The command line to run (interpreted by the remote shell).
-    command: String,
-
-    /// Servers: `host`, `login-user@host`, `host:port`, or an ssh_config alias.
-    #[arg(required = true)]
-    servers: Vec<String>,
-
     /// Login user (default: from ssh_config or the local user).
     #[arg(short = 'l', long = "login-user")]
     login_user: Option<String>,
@@ -126,6 +141,24 @@ struct Cli {
     /// Verbose logging (repeat for more).
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Print the resolved hosts on stderr, then run the command.
+    #[arg(long)]
+    show_hosts: bool,
+
+    /// Remote shell command, then a provider, then that provider's arguments.
+    ///
+    /// The provider is `cl` (the arguments are hosts), `file` (the arguments
+    /// are newline-separated host files, `-` for stdin), or a name resolved as
+    /// the executable `tues-provider-<name>` on `PATH`.
+    #[arg(
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "COMMAND PROVIDER [ARGS]...",
+        num_args = 1..
+    )]
+    args: Vec<String>,
 }
 
 /// One `--file` argument.
@@ -255,12 +288,20 @@ async fn main() -> anyhow::Result<()> {
         }),
     };
 
-    let multi = cli.servers.len() > 1;
-    let prefix = multi && !cli.no_prefix;
     let jobs = cli.jobs.max(1);
     if cli.fail_fast() && jobs != 1 {
         anyhow::bail!("--check only works with one job at a time");
     }
+    let hosts = resolve_hosts(&cli)?;
+    if cli.show_hosts {
+        let noun = if hosts.len() == 1 { "host" } else { "hosts" };
+        eprintln!("{} {noun}:", hosts.len());
+        for host in &hosts {
+            eprintln!("{host}");
+        }
+    }
+    let multi = hosts.len() > 1;
+    let prefix = multi && !cli.no_prefix;
     let sem = Arc::new(Semaphore::new(jobs));
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let stderr = Arc::new(Mutex::new(tokio::io::stderr()));
@@ -268,7 +309,7 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.fail_fast() {
         let mut exit_code = 0i32;
-        for server in &cli.servers {
+        for server in &hosts {
             let outcome = run_host(
                 &cli,
                 server,
@@ -285,8 +326,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(exit_code);
     }
 
-    let mut tasks = Vec::with_capacity(cli.servers.len());
-    for server in cli.servers.clone() {
+    let mut tasks = Vec::with_capacity(hosts.len());
+    for server in hosts {
         let sem = sem.clone();
         let cli = cli.clone();
         let pm = password_manager.clone();
@@ -337,6 +378,11 @@ fn note_failure(
 }
 
 impl Cli {
+    /// The remote shell command.
+    fn command(&self) -> &str {
+        &self.args[0]
+    }
+
     /// A PTY is allocated unless `--no-pty` was given last.
     fn use_pty(&self) -> bool {
         self.pty || !self.no_pty
@@ -345,6 +391,121 @@ impl Cli {
     /// Stop at the first unsuccessful host unless `--no-check` was given last.
     fn fail_fast(&self) -> bool {
         self.check && !self.no_check
+    }
+}
+
+/// Hosts from the provider named after the command.
+fn resolve_hosts(cli: &Cli) -> anyhow::Result<Vec<String>> {
+    let Some(provider) = cli.args.get(1).map(String::as_str) else {
+        anyhow::bail!("a provider is required after the command (`cl`, `file`, or a name)");
+    };
+    let pargs = cli.args.get(2..).unwrap_or(&[]);
+    let hosts = match provider {
+        "cl" => pargs.iter().filter(|h| !h.is_empty()).cloned().collect(),
+        "file" => hosts_from_files(pargs)?,
+        name => {
+            let hosts = hosts_from_program(name, pargs)?;
+            if hosts.is_empty() {
+                anyhow::bail!("tues-provider-{name} produced no hosts");
+            }
+            hosts
+        }
+    };
+    if hosts.is_empty() {
+        anyhow::bail!("no hosts");
+    }
+    Ok(hosts)
+}
+
+/// Non-empty lines, with surrounding whitespace removed.
+fn host_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn hosts_from_files(files: &[String]) -> anyhow::Result<Vec<String>> {
+    if files.is_empty() {
+        anyhow::bail!("file provider requires at least one file");
+    }
+    let mut hosts = Vec::new();
+    let mut saw_stdin = false;
+    for path in files {
+        let text = if path == "-" {
+            if saw_stdin {
+                anyhow::bail!("stdin can only be used once");
+            }
+            saw_stdin = true;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading hosts from stdin")?;
+            buf
+        } else {
+            std::fs::read_to_string(path).with_context(|| format!("reading hosts from {path}"))?
+        };
+        hosts.extend(host_lines(&text));
+    }
+    Ok(hosts)
+}
+
+fn hosts_from_program(name: &str, args: &[String]) -> anyhow::Result<Vec<String>> {
+    if !provider_name_ok(name) {
+        anyhow::bail!("not a provider name: {name}");
+    }
+    let bin = format!("tues-provider-{name}");
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let Some(exe) = find_executable(&path, &bin) else {
+        anyhow::bail!("no provider executable {bin} on PATH");
+    };
+    let output = std::process::Command::new(&exe)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .with_context(|| format!("running {bin}"))?;
+    if !output.status.success() {
+        let detail = match output.status.code() {
+            Some(code) => format!("exited with {code}"),
+            None => "was terminated by a signal".to_string(),
+        };
+        anyhow::bail!("{bin} {detail}");
+    }
+    let text = String::from_utf8(output.stdout)
+        .with_context(|| format!("{bin} wrote hosts that are not utf-8"))?;
+    Ok(host_lines(&text))
+}
+
+/// A provider name is one path segment, so it cannot point at another program.
+fn provider_name_ok(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
+}
+
+/// First executable named `name` on `path_var` (`PATH` syntax).
+fn find_executable(path_var: &OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path_var).find_map(|dir| {
+        let candidate = dir.join(name);
+        is_executable(&candidate).then_some(candidate)
+    })
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(meta) = path.metadata() else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
     }
 }
 
@@ -442,7 +603,7 @@ async fn run_command(
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
     let mut cmd = session
-        .shell(&cli.command)
+        .shell(cli.command())
         .pty(cli.use_pty())
         .stdin(Stdio::Null);
 
@@ -503,6 +664,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::FileSpec;
 
     #[test]
@@ -528,5 +691,74 @@ mod tests {
         assert!(FileSpec::parse("").is_err());
         assert!(FileSpec::parse(r"f\").is_err());
         assert!(FileSpec::parse("..").is_err());
+    }
+
+    #[test]
+    fn host_lines_skip_blank_lines() {
+        assert_eq!(
+            super::host_lines(" a \n\n\tb\r\n\n"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_names_are_single_path_segments() {
+        assert!(super::provider_name_ok("netbox"));
+        assert!(super::provider_name_ok("my.inv"));
+        assert!(!super::provider_name_ok(""));
+        assert!(!super::provider_name_ok("."));
+        assert!(!super::provider_name_ok(".."));
+        assert!(!super::provider_name_ok("a/b"));
+        assert!(!super::provider_name_ok("a\\b"));
+    }
+
+    #[test]
+    fn command_and_provider_parse_and_later_options_stay_provider_args() {
+        let cli = super::Cli::try_parse_from([
+            "tues",
+            "--show-hosts",
+            "--no-pty",
+            "echo hi",
+            "netbox",
+            "--site",
+            "nyc",
+            "-",
+        ])
+        .unwrap();
+        assert!(cli.show_hosts);
+        assert!(!cli.use_pty());
+        assert_eq!(cli.command(), "echo hi");
+        assert_eq!(
+            cli.args,
+            vec![
+                "echo hi".to_string(),
+                "netbox".to_string(),
+                "--site".to_string(),
+                "nyc".to_string(),
+                "-".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_executable_requires_the_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("tues-provider-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("tues-provider-demo");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = dir.as_os_str();
+        assert!(super::find_executable(path, "tues-provider-demo").is_none());
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            super::find_executable(path, "tues-provider-demo").as_deref(),
+            Some(bin.as_path())
+        );
+        assert!(super::find_executable(path, "tues-provider-missing").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
