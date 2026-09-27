@@ -6,7 +6,9 @@ Usage: scripts/release [--dry-run] [--preview] [--python 3.9,3.11,3.12,3.13] [VE
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). The script commits the version bump, creates an annotated tag
 vVERSION, and writes a release sdist plus one wheel per configured CPython
-to dist/. It does not push the tag or upload the files.
+to dist/<version>/. It does not push the tag or upload the files. dist/latest
+points at the version just built. dist/stable points at the newest tagged
+release and is left alone for a --preview build.
 
 --preview builds VERSION.post1.dev1+$USER.$ISODATE.$COMMIT instead, from the
 workspace version when VERSION is omitted. That build is not committed or
@@ -184,18 +186,64 @@ def tag_exists(tag: str) -> bool:
     return result.returncode == 0
 
 
-def build(pythons: Sequence[str]) -> None:
+def version_directory(name: str) -> Path:
+    """``dist/<name>``, refusing names that could escape that directory."""
+    if (
+        not name
+        or name in (".", "..", "latest", "stable")
+        or "/" in name
+        or "\\" in name
+    ):
+        raise ReleaseError(f"refusing version directory {name!r}")
+    return DIST / name
+
+
+def prepare_version_dir(name: str) -> Path:
+    """Replace ``dist/<name>`` with an empty directory. Other versions stay."""
+    path = version_directory(name)
+    if path.is_symlink():
+        raise ReleaseError(f"{path} is a symlink")
+    DIST.mkdir(exist_ok=True)
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir()
+    return path
+
+
+def retarget(link_name: str, version_name: str) -> None:
+    """Point ``dist/<link_name>`` at ``dist/<version_name>``."""
+    version_directory(version_name)
+    DIST.mkdir(exist_ok=True)
+    link = DIST / link_name
+    if link.is_symlink() or (link.exists() and not link.is_dir()):
+        link.unlink()
+    elif link.is_dir():
+        raise ReleaseError(f"{link} is a directory; not replacing it with a symlink")
+    temporary = DIST / f".{link_name}.tmp"
+    if temporary.is_symlink() or temporary.exists():
+        temporary.unlink()
+    temporary.symlink_to(version_name)
+    temporary.replace(link)
+
+
+def publish(name: str, *, stable: bool) -> None:
+    """Point dist/latest at this version, and dist/stable too when tagged."""
+    retarget("latest", name)
+    if stable:
+        retarget("stable", name)
+
+
+def build(pythons: Sequence[str], version_name: str) -> Path:
     """Build the sdist and one wheel per interpreter inside the manylinux image.
 
-    The container's glibc is 2.17, so the wheels are tagged manylinux2014
-    instead of whatever the host happens to provide. Cargo's download cache
-    lives in a named volume; the source tree is mounted at /io and `dist/`
-    is handed back to the user who invoked the script.
+    Artifacts land in ``dist/<version_name>/``. Other version directories are
+    left in place. The container's glibc is 2.17, so the wheels are tagged
+    manylinux2014. Cargo's download cache lives in a named volume.
     """
     if shutil.which("docker") is None:
         raise ReleaseError("docker is required to build the release wheels")
-    shutil.rmtree(DIST, ignore_errors=True)
-    DIST.mkdir()
+    out = prepare_version_dir(version_name)
+    relative = out.relative_to(ROOT).as_posix()
     # One sdist, then a wheel per interpreter built from it. `--locked` is
     # not passed: the sdist drops the CLI-only crates, so its workspace no
     # longer matches the repo lock file and Cargo prunes that locally.
@@ -210,13 +258,14 @@ def build(pythons: Sequence[str]) -> None:
         "build",
         "--release", "--strip", "--sdist",
         "--compatibility", "manylinux2014",
-        "--out", "dist",
+        "--out", relative,
     ]
     for py in pythons:
         cmd += ["-i", f"python{py}"]
     print(f"Building wheels in {IMAGE}", flush=True)
     run(cmd)
-    claim_dist()
+    claim_dist(relative)
+    return out
 
 
 def docker_rootless() -> bool:
@@ -224,8 +273,8 @@ def docker_rootless() -> bool:
     return "rootless" in info
 
 
-def claim_dist() -> None:
-    """Make dist/ belong to the user who ran the script.
+def claim_dist(relative: str) -> None:
+    """Make one dist subdirectory belong to the user who ran the script.
 
     Rootless Docker already maps container root to that user, and chowning to
     the host uid from inside the container lands on nobody. A rootful daemon
@@ -239,9 +288,16 @@ def claim_dist() -> None:
             "--entrypoint", "chown",
             "-v", f"{ROOT}:/io",
             IMAGE,
-            "-R", f"{os.getuid()}:{os.getgid()}", "/io/dist",
+            "-R", f"{os.getuid()}:{os.getgid()}", f"/io/{relative}",
         ]
     )
+
+
+def show_artifacts(directory: Path) -> None:
+    print()
+    print(f"Artifacts in {directory.relative_to(ROOT)}/:")
+    for artifact in sorted(directory.iterdir()):
+        print(artifact.name)
 
 
 def main(argv: Sequence[str]) -> int:
@@ -279,17 +335,19 @@ def main(argv: Sequence[str]) -> int:
             raise ReleaseError("working tree is not clean")
         print("working tree is not clean; a real run would stop here", file=sys.stderr)
 
+    public = published_version(version)
     wheels = (
         f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
-        f"in {IMAGE} and write them to dist/"
+        f"in {IMAGE} and write them to dist/{public}/"
     )
     if args.preview:
         if args.dry_run:
-            print(f"would set version {current} -> {published_version(version)} for the build only")
+            print(f"would set version {current} -> {public} for the build only")
             print("would not commit or tag, and would restore Cargo.toml and Cargo.lock")
             print(wheels)
+            print(f"would point dist/latest at {public}")
             return 0
-        print(f"preview {published_version(version)}")
+        print(f"preview {public}")
         rewrite_cargo_toml(current, version)
         try:
             refreshed = run(
@@ -299,18 +357,17 @@ def main(argv: Sequence[str]) -> int:
             )
             if refreshed.returncode != 0:
                 raise ReleaseError("cargo metadata rejected the preview version")
-            build(pythons)
+            out = build(pythons, public)
+            publish(public, stable=False)
         finally:
             restore_manifests()
+        show_artifacts(out)
         print()
-        print("Artifacts in dist/:")
-        for artifact in sorted(DIST.iterdir()):
-            print(artifact.name)
-        print()
+        print(f"dist/latest -> {public}")
         print("The preview version was not committed. Upload the artifacts with:")
-        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/*')
+        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/latest/*')
         print("or:")
-        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/*')
+        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/latest/*')
         return 0
 
     need_commit = False
@@ -332,6 +389,7 @@ def main(argv: Sequence[str]) -> int:
         else:
             print(f"tag {tag} already exists")
         print(wheels)
+        print(f"would point dist/latest and dist/stable at {public}")
         return 0
 
     if need_commit:
@@ -350,20 +408,21 @@ def main(argv: Sequence[str]) -> int:
         git("tag", "-a", tag, "-m", f"tues {version}")
         print(f"tagged {tag}")
 
-    build(pythons)
+    out = build(pythons, public)
+    publish(public, stable=True)
 
+    show_artifacts(out)
     print()
-    print("Artifacts in dist/:")
-    for artifact in sorted(DIST.iterdir()):
-        print(artifact.name)
+    print(f"dist/latest -> {public}")
+    print(f"dist/stable -> {public}")
     print()
     print("The tag is local. Publish it with:")
     print(f"  git push origin HEAD {tag}")
     print()
     print("Upload the artifacts to an internal index with:")
-    print('  twine upload --repository-url "$TUES_PYPI_URL" dist/*')
+    print('  twine upload --repository-url "$TUES_PYPI_URL" dist/stable/*')
     print("or:")
-    print('  uv publish --publish-url "$TUES_PYPI_URL" dist/*')
+    print('  uv publish --publish-url "$TUES_PYPI_URL" dist/stable/*')
     return 0
 
 

@@ -571,14 +571,16 @@ pytest                                       # Python tests, also against Docker
 
 `scripts/release` sets the workspace version (the Python package reads it from
 there), commits it, and tags `v<version>`. It then builds an sdist and one
-wheel per CPython into `dist/` for an internal index. Each wheel carries the
-extension module and the `tues` console script. The tag is not pushed and the
-artifacts are not uploaded.
+wheel per CPython into `dist/<version>/` for an internal index. Each wheel
+carries the extension module and the `tues` console script. Older version
+directories are left in place. `dist/latest` points at the version just
+built, and `dist/stable` points at the newest tagged release. The tag is not
+pushed and the artifacts are not uploaded.
 
 ```sh
 scripts/release 0.2.0
 git push origin HEAD v0.2.0
-twine upload --repository-url "$TUES_PYPI_URL" dist/*
+twine upload --repository-url "$TUES_PYPI_URL" dist/stable/*
 ```
 
 By default that is Python 3.9, 3.11, 3.12 and 3.13. The build runs in the
@@ -598,7 +600,8 @@ scripts/release --preview
 
 The local part is `$USER`, the UTC date `YYYYMMDD`, and the short commit
 hash. Nothing is committed; `Cargo.toml` and `Cargo.lock` are restored after
-the wheels are written.
+the wheels are written. A preview updates `dist/latest` and leaves
+`dist/stable` where it is.
 
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
