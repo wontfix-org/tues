@@ -56,7 +56,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
       --no-ssh-config        Do not read any ssh_config
       --file <SRC[:DST]>     Upload a file or directory first; may be repeated
-      --pty                  Request a pseudo-terminal (default)
+      --pty                  Request a pseudo-terminal
       --no-pty               Do not request a pseudo-terminal
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
@@ -84,8 +84,9 @@ alias from `~/.ssh/config`.
 # Restart a service on three hosts, four at a time, as root.
 tues -l deploy -u root -j 4 'systemctl restart nginx' cl web01 web02 web03
 
-# One host, without a PTY: raw stdout/stderr, the remote exit status becomes ours.
-tues --no-pty 'tar cz /var/log' cl backup01 > logs.tgz
+# One host: raw stdout/stderr, the remote exit status becomes ours.
+# `--pty` allocates a pseudo-terminal; `--no-pty` overrides a script that asks for one.
+tues 'tar cz /var/log' cl backup01 > logs.tgz
 
 # Passwords from the environment instead of the terminal.
 TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' cl db01 db02
@@ -118,7 +119,8 @@ matter, and only that first block is read:
 
 `user` is the sudo user, `pty` requests a pseudo-terminal, and `prefix` labels
 each output line with the host (`true` always, `false` never; omit it to
-prefix only when several hosts are selected). `--user`, `--pty` / `--no-pty`,
+prefix only when several hosts are selected). Omitting `pty` leaves the
+terminal off, the same as the command line. `--user`, `--pty` / `--no-pty`,
 and `--no-prefix` override the header.
 
 `--file SRC` uploads a file or directory (recursively) into the remote working

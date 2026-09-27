@@ -251,9 +251,25 @@ fn wrong_sudo_password_is_an_error() {
 }
 
 #[test]
-fn pty_is_the_default_with_sudo() {
+fn sudo_runs_without_a_pty_unless_requested() {
     let f = sshd();
     let out = tues()
+        .arg("-u")
+        .arg("root")
+        .arg("id -un")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "root\n");
+
+    let out = tues()
+        .arg("--pty")
         .arg("-u")
         .arg("root")
         .arg("id -un")
@@ -580,7 +596,7 @@ fn script_header_below_code_is_ignored() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\r\n"));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\n"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

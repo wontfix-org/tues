@@ -117,7 +117,7 @@ struct Cli {
     #[arg(short = 'f', long = "file", value_name = "SRC[:DST]", value_parser = FileSpec::parse)]
     files: Vec<FileSpec>,
 
-    /// Request a pseudo-terminal (the default).
+    /// Request a pseudo-terminal.
     #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_pty")]
     pty: bool,
 
@@ -431,9 +431,9 @@ fn note_failure(
 }
 
 impl Cli {
-    /// A PTY is allocated unless `--no-pty` was given last.
+    /// A PTY is allocated only when `--pty` was given last.
     fn use_pty(&self) -> bool {
-        self.pty || !self.no_pty
+        self.pty && !self.no_pty
     }
 
     /// Stop at the first unsuccessful host unless `--no-check` was given last.
@@ -647,7 +647,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<Run> {
 }
 
 /// Command-line flags win. Unset flags keep the script header, and unset
-/// header fields keep the usual defaults (pty on, prefix when there are
+/// header fields keep the usual defaults (no pty, prefix when there are
 /// several hosts).
 fn effective_settings(
     cli: &Cli,
@@ -657,7 +657,7 @@ fn effective_settings(
     let pty = if cli.pty || cli.no_pty {
         cli.use_pty()
     } else {
-        defaults.pty.unwrap_or(true)
+        defaults.pty.unwrap_or(false)
     };
     let prefix = if cli.no_prefix {
         Some(false)
@@ -1159,6 +1159,11 @@ mod tests {
         .unwrap();
         assert!(cli.show_hosts);
         assert!(!cli.use_pty());
+
+        let plain = super::Cli::try_parse_from(["tues", "true", "cl", "h"]).unwrap();
+        assert!(!plain.use_pty());
+        let with_pty = super::Cli::try_parse_from(["tues", "--pty", "true", "cl", "h"]).unwrap();
+        assert!(with_pty.use_pty());
         assert_eq!(cli.args[0], "echo hi");
         assert_eq!(
             cli.args,
@@ -1322,7 +1327,7 @@ echo hi
         let (user, pty, prefix) =
             super::effective_settings(&cli, &super::ScriptDefaults::default());
         assert_eq!(user, None);
-        assert!(pty);
+        assert!(!pty);
         assert_eq!(prefix, None);
     }
 }
