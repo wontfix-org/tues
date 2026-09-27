@@ -26,6 +26,7 @@ fn tues() -> Command {
 fn single_host_streams_raw_output_and_exit_code() {
     let f = sshd();
     let out = tues()
+        .arg("--no-pty")
         .arg("echo hello; echo oops >&2; exit 3")
         .arg(&f.host)
         .output()
@@ -39,6 +40,7 @@ fn single_host_streams_raw_output_and_exit_code() {
 fn multiple_hosts_with_sudo_and_prefixes() {
     let f = sshd();
     let out = tues()
+        .arg("--no-pty")
         .arg("-j")
         .arg("2")
         .arg("-u")
@@ -129,10 +131,9 @@ fn wrong_sudo_password_is_an_error() {
 }
 
 #[test]
-fn pty_flag_with_sudo() {
+fn pty_is_the_default_with_sudo() {
     let f = sshd();
     let out = tues()
-        .arg("--pty")
         .arg("-u")
         .arg("root")
         .arg("id -un")

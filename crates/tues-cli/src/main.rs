@@ -77,9 +77,13 @@ struct Cli {
     #[arg(long)]
     no_ssh_config: bool,
 
-    /// Request a pseudo-terminal.
-    #[arg(long)]
+    /// Request a pseudo-terminal (the default).
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_pty")]
     pty: bool,
+
+    /// Do not request a pseudo-terminal.
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "pty")]
+    no_pty: bool,
 
     /// Host key verification policy (default: ssh_config, else strict).
     #[arg(long, value_enum)]
@@ -236,6 +240,13 @@ async fn main() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
+impl Cli {
+    /// A PTY is allocated unless `--no-pty` was given last.
+    fn use_pty(&self) -> bool {
+        self.pty || !self.no_pty
+    }
+}
+
 fn connect_options(
     cli: &Cli,
     server: &str,
@@ -280,7 +291,10 @@ async fn run_host(
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
     let session = Session::connect(connect_options(cli, server, pm)).await?;
-    let mut cmd = session.shell(&cli.command).pty(cli.pty).stdin(Stdio::Null);
+    let mut cmd = session
+        .shell(&cli.command)
+        .pty(cli.use_pty())
+        .stdin(Stdio::Null);
 
     let result = if prefix {
         cmd = cmd.stdout(Stdio::Piped).stderr(Stdio::Piped);

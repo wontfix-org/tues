@@ -52,7 +52,8 @@ tues [OPTIONS] <COMMAND> <SERVERS>...
   -i, --identity <FILE>      Identity file; may be repeated
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
       --no-ssh-config        Do not read any ssh_config
-      --pty                  Request a pseudo-terminal
+      --pty                  Request a pseudo-terminal (default)
+      --no-pty               Do not request a pseudo-terminal
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
       --password-env <VAR>   Take passwords from this environment variable
@@ -68,8 +69,8 @@ alias from `~/.ssh/config`.
 # Restart a service on three hosts, four at a time, as root.
 tues -l deploy -u root -j 4 'systemctl restart nginx' web01 web02 web03
 
-# One host: raw stdout/stderr, the remote exit status becomes ours.
-tues 'tar cz /var/log' backup01 > logs.tgz
+# One host, without a PTY: raw stdout/stderr, the remote exit status becomes ours.
+tues --no-pty 'tar cz /var/log' backup01 > logs.tgz
 
 # Passwords from the environment instead of the terminal.
 TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' db01 db02
