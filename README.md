@@ -65,6 +65,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
       --no-prefix            Do not prefix output lines with the host name
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
       --show-hosts           Print the hosts on stderr, then run the command
+      --sort-hosts           Sort hosts alphabetically before running
   -v, --verbose...           Verbose logging
 ```
 
@@ -74,7 +75,7 @@ the remaining arguments. `file` reads them from files, one host per line, and
 the remaining arguments and options passed through, and reads the same
 newline-separated list from its stdout. tues options come before the command.
 `--show-hosts` prints the resolved list before connecting; without it the
-command runs directly.
+command runs directly. `--sort-hosts` sorts that list alphabetically first.
 
 A host is `host`, `login-user@host`, `host:port`, `[2001:db8::1]:2222`, or an
 alias from `~/.ssh/config`.

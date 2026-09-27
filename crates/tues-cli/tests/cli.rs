@@ -625,3 +625,44 @@ fn missing_or_invalid_script_is_an_error() {
     assert!(stderr.contains("invalid tues-args JSON"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn sort_hosts_runs_in_alphabetical_order() {
+    fn run(sort: bool) -> String {
+        let mut cmd = tues_bin();
+        cmd.arg("--show-hosts")
+            .arg("--check")
+            .arg("--no-ssh-config")
+            .arg("--host-key-check")
+            .arg("off")
+            .arg("--connect-timeout")
+            .arg("1");
+        if sort {
+            cmd.arg("--sort-hosts");
+        }
+        let out = cmd
+            .arg("true")
+            .arg("cl")
+            .arg("b.invalid")
+            .arg("a.invalid")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
+    let unsorted = run(false);
+    assert!(
+        unsorted.starts_with("2 hosts:\nb.invalid\na.invalid\n"),
+        "{unsorted}"
+    );
+    assert!(unsorted.contains("b.invalid: error:"), "{unsorted}");
+    assert!(!unsorted.contains("a.invalid: error:"), "{unsorted}");
+
+    let sorted = run(true);
+    assert!(
+        sorted.starts_with("2 hosts:\na.invalid\nb.invalid\n"),
+        "{sorted}"
+    );
+    assert!(sorted.contains("a.invalid: error:"), "{sorted}");
+    assert!(!sorted.contains("b.invalid: error:"), "{sorted}");
+}

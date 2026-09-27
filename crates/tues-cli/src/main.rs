@@ -168,6 +168,10 @@ struct Cli {
     #[arg(long)]
     show_hosts: bool,
 
+    /// Sort hosts alphabetically before running the command.
+    #[arg(long)]
+    sort_hosts: bool,
+
     /// Remote shell command, then a provider, then that provider's arguments.
     ///
     /// The provider is `cl` (the arguments are hosts), `file` (the arguments
@@ -335,7 +339,10 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("--check only works with one job at a time");
     }
     let run = prepare_run(&cli)?;
-    let hosts = resolve_hosts(&cli)?;
+    let mut hosts = resolve_hosts(&cli)?;
+    if cli.sort_hosts {
+        hosts.sort();
+    }
     if cli.show_hosts {
         let noun = if hosts.len() == 1 { "host" } else { "hosts" };
         eprintln!("{} {noun}:", hosts.len());
