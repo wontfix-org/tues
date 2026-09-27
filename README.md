@@ -54,6 +54,7 @@ tues [OPTIONS] <COMMAND> <SERVERS>...
   -i, --identity <FILE>      Identity file; may be repeated
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
       --no-ssh-config        Do not read any ssh_config
+      --file <SRC[:DST]>     Upload a file or directory first; may be repeated
       --pty                  Request a pseudo-terminal (default)
       --no-pty               Do not request a pseudo-terminal
       --host-key-check <P>   strict | accept-new | off
@@ -76,7 +77,17 @@ tues --no-pty 'tar cz /var/log' backup01 > logs.tgz
 
 # Passwords from the environment instead of the terminal.
 TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' db01 db02
+
+# Upload first. `deploy.sh` lands in the remote working directory and is
+# removed afterwards; `app.conf` is kept at its destination.
+tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' web01
 ```
+
+`--file SRC` uploads a file or directory (recursively) into the remote working
+directory under its own name and deletes it once the command has finished.
+`--file SRC:DST` uploads to `DST` and leaves it in place; an existing remote
+directory receives the file inside it, like `cp`. Escape a literal `:` as `\:`
+and a literal `\` as `\\`. Uploads run as the command user.
 
 Hosts are visited one after another. `-j` raises how many run at once. With
 several hosts each output line is prefixed with `host: `, and the exit status

@@ -155,6 +155,74 @@ fn check_rejects_more_than_one_job() {
 }
 
 #[test]
+fn file_uploads_are_temporary_unless_mapped() {
+    let f = sshd();
+    let id = std::process::id();
+    let dir = std::env::temp_dir().join(format!("tues-cli-files-{id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("tree").join("sub")).unwrap();
+    std::fs::write(dir.join("tree").join("sub").join("x.txt"), b"tree").unwrap();
+    std::fs::write(dir.join("a:b"), b"colon").unwrap();
+    std::fs::write(dir.join("kept"), b"kept").unwrap();
+    let kept = format!("/tmp/tues-cli-kept-{id}");
+
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--file")
+        .arg(dir.join("tree"))
+        .arg("--file")
+        .arg(dir.join("a\\:b"))
+        .arg("--file")
+        .arg(format!("{}:{kept}", dir.join("kept").display()))
+        .arg(format!("cat tree/sub/x.txt a:b {kept}; pwd"))
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("treecolonkept/home/{USER}\n")
+    );
+
+    // Temporary uploads are gone; the mapped one stays.
+    let out = tues()
+        .arg("--no-pty")
+        .arg(format!(
+            "test ! -e tree && test ! -e a:b && cat {kept} && rm {kept}"
+        ))
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "kept");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_file_upload_fails_before_the_command() {
+    let f = sshd();
+    let out = tues()
+        .arg("--file")
+        .arg("/nonexistent/tues-file")
+        .arg("echo ran")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(255));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("upload /nonexistent/tues-file"), "{stderr}");
+}
+
+#[test]
 fn wrong_sudo_password_is_an_error() {
     let f = sshd();
     let out = tues()

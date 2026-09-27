@@ -86,6 +86,13 @@ struct Cli {
     #[arg(long)]
     no_ssh_config: bool,
 
+    /// Upload a file or directory (recursively) before running the command;
+    /// may be repeated. `SRC` goes into the remote working directory and is
+    /// removed afterwards. `SRC:DST` is uploaded to `DST` and kept. Write a
+    /// literal `:` as `\:` and a literal `\` as `\\`.
+    #[arg(short = 'f', long = "file", value_name = "SRC[:DST]", value_parser = FileSpec::parse)]
+    files: Vec<FileSpec>,
+
     /// Request a pseudo-terminal (the default).
     #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_pty")]
     pty: bool,
@@ -119,6 +126,52 @@ struct Cli {
     /// Verbose logging (repeat for more).
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     verbose: u8,
+}
+
+/// One `--file` argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileSpec {
+    src: PathBuf,
+    /// Remote name used when no destination was given.
+    name: String,
+    /// Explicit destination; `None` means the working directory, temporary.
+    dst: Option<String>,
+}
+
+impl FileSpec {
+    /// Parse `SRC` or `SRC:DST`. A backslash escapes the next character, so
+    /// `\:` is a literal colon and `\\` a literal backslash.
+    fn parse(spec: &str) -> Result<FileSpec, String> {
+        let mut parts: Vec<String> = vec![String::new()];
+        let mut chars = spec.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => match chars.next() {
+                    Some(next) => parts.last_mut().expect("one part").push(next),
+                    None => return Err("trailing backslash".into()),
+                },
+                ':' if parts.len() == 1 => parts.push(String::new()),
+                c => parts.last_mut().expect("one part").push(c),
+            }
+        }
+        let mut parts = parts.into_iter();
+        let src = parts.next().expect("one part");
+        if src.is_empty() {
+            return Err("empty source path".into());
+        }
+        let dst = parts.next().filter(|d| !d.is_empty());
+        let src = PathBuf::from(src);
+        let name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("{}: cannot derive a file name", src.display()))?;
+        Ok(FileSpec { src, name, dst })
+    }
+
+    fn is_temporary(&self) -> bool {
+        self.dst.is_none()
+    }
 }
 
 /// Prompts once per (kind, login user) and reuses the answer across hosts, since a
@@ -339,12 +392,61 @@ async fn run_host(
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
     let session = Session::connect(connect_options(cli, server, pm)).await?;
+    let mut temporary = Vec::new();
+    let result = match upload_files(&session, &cli.files, &mut temporary).await {
+        Ok(()) => run_command(cli, &session, server, prefix, stdout, stderr).await,
+        Err(e) => Err(e),
+    };
+    for path in temporary {
+        if let Err(e) = session.delete(&path).await {
+            eprintln!("{server}: warning: could not remove {path}: {e}");
+        }
+    }
+    let _ = session.close().await;
+    result
+}
+
+/// Upload every `--file`. Remote paths of temporary uploads are appended to
+/// `temporary` as they succeed, so a failure halfway still cleans up.
+async fn upload_files(
+    session: &Session,
+    files: &[FileSpec],
+    temporary: &mut Vec<String>,
+) -> Result<(), Error> {
+    for spec in files {
+        let target = match &spec.dst {
+            None => spec.name.clone(),
+            Some(dst) => match session.stat(dst).await {
+                // Like `cp`: an existing directory receives the file inside it.
+                Ok(md) if md.is_dir() => format!("{}/{}", dst.trim_end_matches('/'), spec.name),
+                _ => dst.clone(),
+            },
+        };
+        session
+            .upload(&spec.src, &target)
+            .await
+            .map_err(|e| Error::Other(format!("upload {} to {target}: {e}", spec.src.display())))?;
+        if spec.is_temporary() {
+            temporary.push(target);
+        }
+    }
+    Ok(())
+}
+
+async fn run_command(
+    cli: &Cli,
+    session: &Session,
+    server: &str,
+    prefix: bool,
+    stdout: Arc<Mutex<tokio::io::Stdout>>,
+    stderr: Arc<Mutex<tokio::io::Stderr>>,
+) -> Result<tues_core::ExitStatus, Error> {
     let mut cmd = session
         .shell(&cli.command)
         .pty(cli.use_pty())
         .stdin(Stdio::Null);
 
-    let result = if prefix {
+    if prefix {
         cmd = cmd.stdout(Stdio::Piped).stderr(Stdio::Piped);
         let mut child = cmd.spawn().await?;
         let out = child.stdout.take().expect("piped");
@@ -359,9 +461,7 @@ async fn run_host(
     } else {
         cmd = cmd.stdout(Stdio::Inherit).stderr(Stdio::Inherit);
         cmd.status().await
-    };
-    let _ = session.close().await;
-    result
+    }
 }
 
 /// Copy `reader` to `sink`, prefixing every line. Partial trailing lines are
@@ -398,5 +498,35 @@ where
         let mut w = sink.lock().await;
         let _ = w.write_all(&Bytes::from(out)).await;
         let _ = w.flush().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileSpec;
+
+    #[test]
+    fn file_spec_parsing() {
+        let plain = FileSpec::parse("dir/app.tar").unwrap();
+        assert_eq!(plain.src.to_str(), Some("dir/app.tar"));
+        assert_eq!(plain.name, "app.tar");
+        assert!(plain.is_temporary());
+
+        let mapped = FileSpec::parse("a.txt:/etc/a").unwrap();
+        assert_eq!(mapped.dst.as_deref(), Some("/etc/a"));
+        assert!(!mapped.is_temporary());
+
+        let escaped = FileSpec::parse(r"C\:\\x:/tmp/y\:z").unwrap();
+        assert_eq!(escaped.src.to_str(), Some(r"C:\x"));
+        assert_eq!(escaped.dst.as_deref(), Some("/tmp/y:z"));
+
+        // Only the first unescaped colon separates; the rest belong to DST.
+        let colons = FileSpec::parse("f:/a:b").unwrap();
+        assert_eq!(colons.dst.as_deref(), Some("/a:b"));
+
+        assert_eq!(FileSpec::parse("f:").unwrap().dst, None);
+        assert!(FileSpec::parse("").is_err());
+        assert!(FileSpec::parse(r"f\").is_err());
+        assert!(FileSpec::parse("..").is_err());
     }
 }
