@@ -52,25 +52,30 @@ pub enum SshConfigSource {
 /// One hop of a `ProxyJump` chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JumpHost {
-    pub user: Option<String>,
+    /// Login user for this hop, if the jump string gave one.
+    pub login_user: Option<String>,
     pub host: String,
     pub port: Option<u16>,
 }
 
 impl JumpHost {
-    /// Parse `[user@]host[:port]` or `ssh://[user@]host[:port]`.
+    /// Parse `[login-user@]host[:port]` or `ssh://[login-user@]host[:port]`.
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
         let s = s.strip_prefix("ssh://").unwrap_or(s);
         if s.is_empty() {
             return Err(Error::Config("empty ProxyJump entry".into()));
         }
-        let (user, rest) = match s.rsplit_once('@') {
+        let (login_user, rest) = match s.rsplit_once('@') {
             Some((u, r)) => (Some(u.to_string()), r),
             None => (None, s),
         };
         let (host, port) = split_host_port(rest)?;
-        Ok(JumpHost { user, host, port })
+        Ok(JumpHost {
+            login_user,
+            host,
+            port,
+        })
     }
 }
 
@@ -103,9 +108,10 @@ fn parse_port(p: &str) -> Result<u16> {
 /// `ssh_config` and then to OpenSSH defaults.
 #[derive(Clone, Default)]
 pub struct ConnectOptions {
-    /// Host alias as written on the command line, optionally `user@host[:port]`.
+    /// Host alias as written on the command line, optionally `login-user@host[:port]`.
     pub destination: String,
-    pub user: Option<String>,
+    /// Login user. Falls back to the destination string, then `ssh_config`, then the local user.
+    pub login_user: Option<String>,
     pub port: Option<u16>,
     /// Override the real host name (like `HostName`).
     pub host_name: Option<String>,
@@ -123,8 +129,9 @@ pub struct ConnectOptions {
     pub host_key_policy: Option<HostKeyPolicy>,
     pub known_hosts_file: Option<PathBuf>,
     pub ssh_config: SshConfigSource,
-    /// Default sudo user for commands that do not set one.
-    pub run_as: Option<String>,
+    /// Default user commands run as. `None` means the login user; any other
+    /// value runs commands via `sudo -u`.
+    pub user: Option<String>,
     pub password_manager: Option<SharedPasswordManager>,
 }
 
@@ -132,19 +139,19 @@ impl std::fmt::Debug for ConnectOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectOptions")
             .field("destination", &self.destination)
-            .field("user", &self.user)
+            .field("login_user", &self.login_user)
             .field("port", &self.port)
             .field("host_name", &self.host_name)
             .field("identity_files", &self.identity_files)
             .field("proxy_jump", &self.proxy_jump)
             .field("host_key_policy", &self.host_key_policy)
-            .field("run_as", &self.run_as)
+            .field("user", &self.user)
             .finish_non_exhaustive()
     }
 }
 
 impl ConnectOptions {
-    /// `destination` may be `host`, `user@host`, `host:port`, or `user@host:port`.
+    /// `destination` may be `host`, `login-user@host`, `host:port`, or `login-user@host:port`.
     pub fn new(destination: impl Into<String>) -> Self {
         ConnectOptions {
             destination: destination.into(),
@@ -152,8 +159,9 @@ impl ConnectOptions {
         }
     }
 
-    pub fn user(mut self, user: impl Into<String>) -> Self {
-        self.user = Some(user.into());
+    /// Set the login user.
+    pub fn login_user(mut self, login_user: impl Into<String>) -> Self {
+        self.login_user = Some(login_user.into());
         self
     }
 
@@ -177,7 +185,7 @@ impl ConnectOptions {
         self
     }
 
-    /// Set the jump chain (`[user@]host[:port]`, comma separated or repeated).
+    /// Set the jump chain (`[login-user@]host[:port]`, comma separated or repeated).
     pub fn proxy_jump(mut self, spec: impl Into<String>) -> Self {
         let spec = spec.into();
         let list = self.proxy_jump.get_or_insert_with(Vec::new);
@@ -253,8 +261,9 @@ impl ConnectOptions {
         self
     }
 
-    pub fn run_as(mut self, user: impl Into<String>) -> Self {
-        self.run_as = Some(user.into());
+    /// Run commands as `user` via `sudo -u`, unless a command says otherwise.
+    pub fn user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
         self
     }
 
@@ -276,13 +285,13 @@ impl ConnectOptions {
 
     /// Resolve with an already loaded config (or none).
     pub fn resolve_with(&self, config: Option<&SshConfig>) -> Result<ResolvedOptions> {
-        // destination: [user@]host[:port]
+        // destination: [login-user@]host[:port]
         let dest = self.destination.trim();
         if dest.is_empty() {
             return Err(Error::Config("empty destination".into()));
         }
         let dest = dest.strip_prefix("ssh://").unwrap_or(dest);
-        let (dest_user, rest) = match dest.rsplit_once('@') {
+        let (dest_login_user, rest) = match dest.rsplit_once('@') {
             Some((u, r)) if !u.is_empty() => (Some(u.to_string()), r),
             _ => (None, dest),
         };
@@ -292,9 +301,9 @@ impl ConnectOptions {
 
         // The destination string is the most specific source, then the
         // builder, then ssh_config, then defaults.
-        let user = dest_user
-            .or(self.user.clone())
-            .or(params.user.clone())
+        let login_user = dest_login_user
+            .or(self.login_user.clone())
+            .or(params.login_user.clone())
             .unwrap_or_else(ssh_config::local_user);
         let port = dest_port.or(self.port).or(params.port).unwrap_or(22);
         let host_name = self
@@ -334,7 +343,7 @@ impl ConnectOptions {
             alias,
             host_name,
             port,
-            user,
+            login_user,
             identity_files,
             identities_only: self
                 .identities_only
@@ -368,7 +377,7 @@ impl ConnectOptions {
                 .or(params.user_known_hosts_file.clone())
                 .unwrap_or_else(|| ssh_config::home_dir().join(".ssh").join("known_hosts")),
             request_tty: params.request_tty.unwrap_or(false),
-            run_as: self.run_as.clone(),
+            user: self.user.clone(),
             password_manager,
             ssh_config: config.cloned(),
         })
@@ -383,7 +392,8 @@ pub struct ResolvedOptions {
     /// The address to connect to.
     pub host_name: String,
     pub port: u16,
-    pub user: String,
+    /// The login user.
+    pub login_user: String,
     pub identity_files: Vec<PathBuf>,
     pub identities_only: bool,
     /// Identity files were given explicitly (not defaults).
@@ -399,7 +409,8 @@ pub struct ResolvedOptions {
     pub host_key_policy: HostKeyPolicy,
     pub known_hosts_file: PathBuf,
     pub request_tty: bool,
-    pub run_as: Option<String>,
+    /// Default user commands run as. `None` means the login user.
+    pub user: Option<String>,
     pub password_manager: SharedPasswordManager,
     /// The config used, so jump hosts resolve against the same file.
     pub ssh_config: Option<SshConfig>,
@@ -411,12 +422,12 @@ impl std::fmt::Debug for ResolvedOptions {
             .field("alias", &self.alias)
             .field("host_name", &self.host_name)
             .field("port", &self.port)
-            .field("user", &self.user)
+            .field("login_user", &self.login_user)
             .field("identity_files", &self.identity_files)
             .field("proxy_jump", &self.proxy_jump)
             .field("host_key_policy", &self.host_key_policy)
             .field("known_hosts_file", &self.known_hosts_file)
-            .field("run_as", &self.run_as)
+            .field("user", &self.user)
             .finish_non_exhaustive()
     }
 }
@@ -427,7 +438,7 @@ impl ResolvedOptions {
     pub fn for_jump(&self, hop: &JumpHost) -> ConnectOptions {
         ConnectOptions {
             destination: hop.host.clone(),
-            user: hop.user.clone(),
+            login_user: hop.login_user.clone(),
             port: hop.port,
             host_name: None,
             identity_files: if self.explicit_identities {
@@ -450,7 +461,7 @@ impl ResolvedOptions {
                 Some(c) => SshConfigSource::Parsed(c.clone()),
                 None => SshConfigSource::None,
             },
-            run_as: None,
+            user: None,
             password_manager: Some(self.password_manager.clone()),
         }
     }
@@ -466,7 +477,7 @@ mod tests {
             .no_ssh_config()
             .resolve()
             .unwrap();
-        assert_eq!(r.user, "alice");
+        assert_eq!(r.login_user, "alice");
         assert_eq!(r.host_name, "example.com");
         assert_eq!(r.port, 2222);
         let r = ConnectOptions::new("[::1]:2200").no_ssh_config().resolve().unwrap();
@@ -474,12 +485,12 @@ mod tests {
         assert_eq!(r.port, 2200);
         // Destination beats builder values.
         let r = ConnectOptions::new("bob@h:2200")
-            .user("api")
+            .login_user("api")
             .port(22)
             .no_ssh_config()
             .resolve()
             .unwrap();
-        assert_eq!(r.user, "bob");
+        assert_eq!(r.login_user, "bob");
         assert_eq!(r.port, 2200);
     }
 
@@ -497,7 +508,7 @@ mod tests {
             .no_ssh_config()
             .resolve()
             .unwrap();
-        assert_eq!(r.user, "bob");
+        assert_eq!(r.login_user, "bob");
         assert_eq!(r.host_name, "2001:db8::1");
         assert_eq!(r.port, 2200);
         // Bracketed without port.
@@ -506,7 +517,10 @@ mod tests {
         assert_eq!(r.port, 22);
         // ssh:// URI form.
         let r = ConnectOptions::new("ssh://bob@[::1]:2022").no_ssh_config().resolve().unwrap();
-        assert_eq!((r.user.as_str(), r.host_name.as_str(), r.port), ("bob", "::1", 2022));
+        assert_eq!(
+            (r.login_user.as_str(), r.host_name.as_str(), r.port),
+            ("bob", "::1", 2022)
+        );
         // Malformed bracket.
         assert!(ConnectOptions::new("[::1").no_ssh_config().resolve().is_err());
         assert!(ConnectOptions::new("[::1]:x").no_ssh_config().resolve().is_err());
@@ -514,7 +528,7 @@ mod tests {
         assert_eq!(
             JumpHost::parse("j@[fe80::2]:2201").unwrap(),
             JumpHost {
-                user: Some("j".into()),
+                login_user: Some("j".into()),
                 host: "fe80::2".into(),
                 port: Some(2201)
             }
@@ -531,16 +545,16 @@ mod tests {
         )
         .unwrap();
         let r = ConnectOptions::new("web")
-            .user("api")
+            .login_user("api")
             .resolve_with(Some(&cfg))
             .unwrap();
-        assert_eq!(r.user, "api");
+        assert_eq!(r.login_user, "api");
         assert_eq!(r.host_name, "10.1.1.1");
         assert_eq!(r.port, 2022);
         assert_eq!(
             r.proxy_jump,
             vec![JumpHost {
-                user: Some("j".into()),
+                login_user: Some("j".into()),
                 host: "jump".into(),
                 port: Some(22)
             }]
@@ -564,7 +578,7 @@ mod tests {
         assert_eq!(
             JumpHost::parse("ssh://u@h:2200").unwrap(),
             JumpHost {
-                user: Some("u".into()),
+                login_user: Some("u".into()),
                 host: "h".into(),
                 port: Some(2200)
             }
@@ -572,7 +586,7 @@ mod tests {
         assert_eq!(
             JumpHost::parse("h").unwrap(),
             JumpHost {
-                user: None,
+                login_user: None,
                 host: "h".into(),
                 port: None
             }
@@ -589,7 +603,7 @@ mod tests {
             .resolve()
             .unwrap();
         let j = r.for_jump(&r.proxy_jump[0]).resolve().unwrap();
-        assert_eq!(j.user, "a");
+        assert_eq!(j.login_user, "a");
         assert_eq!(j.host_name, "jump");
         assert_eq!(j.host_key_policy, HostKeyPolicy::Off);
         assert!(Arc::ptr_eq(&j.password_manager, &r.password_manager));

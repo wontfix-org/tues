@@ -1,8 +1,10 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub use tues_async::ChildSignaller;
 use tues_core::{ExitStatus, Output, Result};
 
 use crate::Runtime;
@@ -51,6 +53,17 @@ impl Child {
         self.rt.block_on(self.inner.wait())
     }
 
+    /// Wait for exit for at most `timeout`; `Ok(None)` if the process is still
+    /// running when the timeout expires.
+    pub fn wait_timeout(&mut self, timeout: Duration) -> Result<Option<ExitStatus>> {
+        self.rt.block_on(async {
+            match tokio::time::timeout(timeout, self.inner.wait()).await {
+                Ok(r) => r.map(Some),
+                Err(_elapsed) => Ok(None),
+            }
+        })
+    }
+
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.inner.try_wait()
     }
@@ -64,8 +77,20 @@ impl Child {
         self.rt.block_on(inner.wait_with_output())
     }
 
-    pub fn kill(&mut self) -> Result<()> {
+    /// Send SIGKILL (if the server supports channel signals) and close the channel.
+    pub fn kill(&self) -> Result<()> {
         self.inner.kill()
+    }
+
+    /// Deliver a signal by name (`"TERM"`, `"INT"`, ...); see
+    /// [`ChildSignaller::signal`].
+    pub fn signal(&self, name: impl Into<String>) -> Result<()> {
+        self.inner.signal(name)
+    }
+
+    /// A handle that can kill or signal this child from another thread.
+    pub fn signaller(&self) -> ChildSignaller {
+        self.inner.signaller()
     }
 
     pub fn id(&self) -> Option<u32> {

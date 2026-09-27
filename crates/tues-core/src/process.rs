@@ -2,7 +2,8 @@
 //!
 //! [`Command`] is pure data. Drivers turn it into an [`ExecPlan`] via
 //! [`Command::plan`], which renders the remote shell line (with `sudo`
-//! wrapping when a run-as user is set) and decides how stdio is handled.
+//! wrapping when the command runs as a user other than the login user) and
+//! decides how stdio is handled.
 
 use std::fmt;
 
@@ -154,16 +155,16 @@ pub struct Command {
     stdout: Option<Stdio>,
     stderr: Option<Stdio>,
     pty: Option<PtyConfig>,
-    run_as: RunAs,
+    user: CommandUser,
 }
 
 /// Which user a command runs as.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum RunAs {
-    /// Use the session's default run-as user (if any).
+pub enum CommandUser {
+    /// Use the session's default user (if any).
     #[default]
     Inherit,
-    /// Run as the SSH login user, never via `sudo`.
+    /// Run as the login user, never via `sudo`.
     LoginUser,
     /// Run as this user via `sudo -u`.
     User(String),
@@ -182,7 +183,7 @@ impl Command {
             stdout: None,
             stderr: None,
             pty: None,
-            run_as: RunAs::Inherit,
+            user: CommandUser::Inherit,
         }
     }
 
@@ -267,15 +268,15 @@ impl Command {
         self
     }
 
-    /// Run the command as another user via `sudo -u`.
-    pub fn run_as(&mut self, user: impl Into<String>) -> &mut Self {
-        self.run_as = RunAs::User(user.into());
+    /// Run the command as `user` via `sudo -u`.
+    pub fn user(&mut self, user: impl Into<String>) -> &mut Self {
+        self.user = CommandUser::User(user.into());
         self
     }
 
-    /// Run the command as the SSH login user, ignoring the session default.
-    pub fn run_as_login_user(&mut self) -> &mut Self {
-        self.run_as = RunAs::LoginUser;
+    /// Run the command as the login user, ignoring the session default.
+    pub fn as_login_user(&mut self) -> &mut Self {
+        self.user = CommandUser::LoginUser;
         self
     }
 
@@ -298,16 +299,18 @@ impl Command {
         &self.env
     }
 
-    pub fn get_run_as(&self) -> &RunAs {
-        &self.run_as
+    pub fn get_user(&self) -> &CommandUser {
+        &self.user
     }
 
-    /// The effective sudo user given the session default.
-    pub fn effective_run_as<'a>(&'a self, session_default: Option<&'a str>) -> Option<&'a str> {
-        match &self.run_as {
-            RunAs::Inherit => session_default,
-            RunAs::LoginUser => None,
-            RunAs::User(u) => Some(u.as_str()),
+    /// The user the command runs as, given the session default.
+    ///
+    /// `None` means the login user (no `sudo`).
+    pub fn effective_user<'a>(&'a self, session_default: Option<&'a str>) -> Option<&'a str> {
+        match &self.user {
+            CommandUser::Inherit => session_default,
+            CommandUser::LoginUser => None,
+            CommandUser::User(u) => Some(u.as_str()),
         }
     }
 
@@ -376,11 +379,11 @@ impl Command {
     /// Render the command into a driver-ready plan.
     ///
     /// `default_stdio` applies to streams the caller did not configure
-    /// (e.g. `Piped` for `spawn`, `Inherit` for `status`). `session_run_as`
-    /// is the session default sudo user for commands that do not set one.
-    pub fn plan(&self, default_stdio: Stdio, session_run_as: Option<&str>) -> ExecPlan {
+    /// (e.g. `Piped` for `spawn`, `Inherit` for `status`). `session_user`
+    /// is the session's default user for commands that do not set one.
+    pub fn plan(&self, default_stdio: Stdio, session_user: Option<&str>) -> ExecPlan {
         let sudo = self
-            .effective_run_as(session_run_as)
+            .effective_user(session_user)
             .map(|user| SudoPlan::new(user.to_string()));
         let command_line = match &sudo {
             None => self.plain_command_line(),
@@ -393,7 +396,7 @@ impl Command {
                 format!(
                     "sudo -S -k -p {} -u {} -- /bin/sh -c {}",
                     shell::quote(&s.prompt_str()),
-                    shell::quote(&s.run_as),
+                    shell::quote(&s.user),
                     shell::quote(&script)
                 )
             }
@@ -412,8 +415,8 @@ impl Command {
 /// Everything the sudo filter needs to know about one elevated execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SudoPlan {
-    /// The sudo `-u` user.
-    pub run_as: String,
+    /// The user passed to `sudo -u`.
+    pub user: String,
     /// The exact bytes sudo prints when asking for a password (`-p`).
     pub prompt: Vec<u8>,
     /// The exact bytes the wrapper script prints once sudo succeeded.
@@ -421,19 +424,19 @@ pub struct SudoPlan {
 }
 
 impl SudoPlan {
-    pub fn new(run_as: String) -> Self {
+    pub fn new(user: String) -> Self {
         let nonce = nonce();
         SudoPlan {
-            run_as,
+            user,
             prompt: format!("[tues-sudo-{nonce}]").into_bytes(),
             marker: format!("[tues-ok-{nonce}]").into_bytes(),
         }
     }
 
     /// Construct with explicit prompt and marker (tests).
-    pub fn with_markers(run_as: String, prompt: &str, marker: &str) -> Self {
+    pub fn with_markers(user: String, prompt: &str, marker: &str) -> Self {
         SudoPlan {
-            run_as,
+            user,
             prompt: prompt.as_bytes().to_vec(),
             marker: marker.as_bytes().to_vec(),
         }
@@ -504,7 +507,7 @@ mod tests {
     #[test]
     fn sudo_wraps_and_applies_env_after_elevation() {
         let mut c = Command::new("id");
-        c.run_as("root").env("A", "1");
+        c.user("root").env("A", "1");
         let plan = c.plan(Stdio::Piped, None);
         let sudo = plan.sudo.as_ref().unwrap();
         let prompt = String::from_utf8(sudo.prompt.clone()).unwrap();
@@ -525,19 +528,16 @@ mod tests {
     }
 
     #[test]
-    fn run_as_precedence() {
+    fn user_precedence() {
         let c = Command::new("id");
         assert!(c.plan(Stdio::Piped, None).sudo.is_none());
-        assert_eq!(
-            c.plan(Stdio::Piped, Some("root")).sudo.unwrap().run_as,
-            "root"
-        );
+        assert_eq!(c.plan(Stdio::Piped, Some("root")).sudo.unwrap().user, "root");
         let mut c = Command::new("id");
-        c.run_as_login_user();
+        c.as_login_user();
         assert!(c.plan(Stdio::Piped, Some("root")).sudo.is_none());
         let mut c = Command::new("id");
-        c.run_as("www");
-        assert_eq!(c.plan(Stdio::Piped, Some("root")).sudo.unwrap().run_as, "www");
+        c.user("www");
+        assert_eq!(c.plan(Stdio::Piped, Some("root")).sudo.unwrap().user, "www");
     }
 
     #[test]

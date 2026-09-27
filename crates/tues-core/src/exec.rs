@@ -293,7 +293,7 @@ mod tests {
 
     fn sudo_plan(pty: bool) -> ExecPlan {
         let mut c = Command::new("cat");
-        c.run_as("root").pty(pty);
+        c.user("root").pty(pty);
         let mut plan = c.plan(Stdio::Piped, None);
         plan.sudo = Some(SudoPlan::with_markers("root".into(), "[P]", "[M]"));
         plan

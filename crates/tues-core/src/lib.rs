@@ -30,6 +30,8 @@ pub use password::{
     MemoizingPasswordManager, NoPasswordManager, PasswordKind, PasswordManager, PasswordPrompter,
     PasswordRequest, SharedPasswordManager, StaticPasswordManager, TtyPrompter, shared,
 };
-pub use process::{Command, ExecPlan, ExitStatus, ExitStatusError, Output, PtyConfig, RunAs, Stdio, SudoPlan};
+pub use process::{
+    Command, CommandUser, ExecPlan, ExitStatus, ExitStatusError, Output, PtyConfig, Stdio, SudoPlan,
+};
 pub use secrecy::{ExposeSecret, SecretString};
 pub use ssh_config::{HostParams, SshConfig};

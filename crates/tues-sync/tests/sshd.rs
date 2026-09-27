@@ -38,7 +38,7 @@ fn stdio_pipes_are_blocking_readers_and_writers() {
 #[test]
 fn sudo_conversation_is_hidden_and_stdin_is_gated() {
     let s = connect();
-    let mut child = s.command("cat").run_as("root").spawn().unwrap();
+    let mut child = s.command("cat").user("root").spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(&[0u8, 1, 2, 3, 255]).unwrap();
     stdin.write_all(PASSWORD.as_bytes()).unwrap();
@@ -54,7 +54,7 @@ fn sudo_conversation_is_hidden_and_stdin_is_gated() {
 #[test]
 fn sudo_with_pty_sync() {
     let s = connect();
-    let out = s.command("id").arg("-un").run_as("root").pty(true).output().unwrap();
+    let out = s.command("id").arg("-un").user("root").pty(true).output().unwrap();
     assert_eq!(out.stdout_lossy(), "root\r\n");
 }
 
@@ -63,7 +63,7 @@ fn sudo_failure_is_reported() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("bad")));
     let s = Session::connect(o).unwrap();
-    let err = s.command("id").run_as("root").output().err().unwrap();
+    let err = s.command("id").user("root").output().err().unwrap();
     assert!(matches!(err, Error::Sudo(SudoError::AuthFailed { .. })), "{err}");
 }
 
@@ -76,6 +76,23 @@ fn kill_and_try_wait() {
     child.kill().unwrap();
     let st = child.wait().unwrap();
     assert!(!st.success());
+}
+
+#[test]
+fn wait_timeout_and_signal_from_another_thread() {
+    let s = connect();
+    let mut child = s.command("sleep").arg("30").spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(child.wait_timeout(Duration::from_millis(200)).unwrap().is_none());
+    let signaller = child.signaller();
+    let killer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        signaller.signal("TERM").unwrap();
+    });
+    // Blocks in wait() while the other thread signals.
+    let st = child.wait_timeout(Duration::from_secs(10)).unwrap().expect("exited");
+    assert_eq!(st.signal(), Some("TERM"), "{st:?}");
+    killer.join().unwrap();
 }
 
 #[test]
@@ -114,7 +131,7 @@ fn sessions_are_usable_from_multiple_threads() {
     let handles: Vec<_> = (0..4)
         .map(|i| {
             let s = s.clone();
-            std::thread::spawn(move || s.shell(format!("echo {i}")).run_as("root").output().unwrap())
+            std::thread::spawn(move || s.shell(format!("echo {i}")).user("root").output().unwrap())
         })
         .collect();
     for (i, h) in handles.into_iter().enumerate() {

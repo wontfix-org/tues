@@ -1,5 +1,7 @@
 import asyncio
 import os
+import signal
+import subprocess
 
 import pytest
 
@@ -13,22 +15,43 @@ def run(coro):
 
 
 async def connect(sshd, **overrides):
-    return await tues.AsyncSession.connect(
-        f"{USER}@{sshd.host}", **sshd.connect_kwargs(**overrides)
-    )
+    return await tues.AsyncSession.connect(f"{USER}@{sshd.host}", **sshd.connect_kwargs(**overrides))
 
 
 def test_run_and_properties(sshd):
     async def main():
         async with await connect(sshd) as s:
-            assert s.user == USER and s.port == sshd.port and not s.closed
-            out = await s.run("echo hello; exit 2")
-            assert out.stdout == b"hello\n" and out.returncode == 2
-            out = await s.run(["id", "-un"], run_as="root", check=True)
-            assert out.stdout == b"root\n"
-            with pytest.raises(tues.TuesError):
-                await s.run("false", check=True)
+            assert isinstance(s, tues.AsyncSession)
+            assert s.login_user == USER and s.port == sshd.port and not s.closed
+            assert repr(s) == f"AsyncSession({USER}@{sshd.host}:{sshd.port})"
+            out = await s.run("echo hello; exit 2", shell=True, capture_output=True)
+            assert isinstance(out, tues.CompletedProcess)
+            assert out.stdout == b"hello\n" and out.stderr == b"" and out.returncode == 2
+            out = await s.run(["id", "-un"], user="root", stdout=tues.PIPE, check=True)
+            assert out.stdout == b"root\n" and out.stderr is None
+            out = await s.run("printf 'a\\r\\nb'; echo e >&2", shell=True, capture_output=True, text=True)
+            assert out.stdout == "a\nb" and out.stderr == "e\n"
+            out = await s.run(["cat"], input="héllo", capture_output=True, encoding="utf-8")
+            assert out.stdout == "héllo"
+            out = await s.run("echo o; echo e >&2", shell=True, stdout=tues.PIPE, stderr=tues.STDOUT)
+            assert out.stdout == b"o\ne\n"
+            assert (await s.run(["cat"], capture_output=True)).stdout == b""  # stdin defaults to EOF
+            with pytest.raises(tues.CalledProcessError) as ei:
+                await s.run(["false"], check=True)
+            assert isinstance(ei.value, subprocess.CalledProcessError)
+            assert ei.value.cmd == ["false"] and ei.value.returncode == 1
         assert s.closed
+
+    run(main())
+
+
+def test_run_timeout(sshd):
+    async def main():
+        async with await connect(sshd) as s:
+            with pytest.raises(tues.TimeoutExpired) as ei:
+                await s.run("echo partial; sleep 30", shell=True, capture_output=True, timeout=1)
+            assert ei.value.stdout == b"partial\n"
+            assert ei.value.timeout == 1
 
     run(main())
 
@@ -42,7 +65,7 @@ def test_concurrent_sudo_commands(sshd):
             return PASSWORD
 
         async with await connect(sshd, password=None, password_manager=prompter) as s:
-            outs = await asyncio.gather(*(s.run(f"echo {i}", run_as="root") for i in range(10)))
+            outs = await asyncio.gather(*(s.run(["echo", str(i)], user="root", capture_output=True) for i in range(10)))
             assert [o.stdout for o in outs] == [f"{i}\n".encode() for i in range(10)]
         # Concurrent first-use may prompt more than once, but never per command.
         assert 1 <= len(calls) < 10
@@ -54,40 +77,92 @@ def test_binary_input_through_sudo(sshd):
     async def main():
         async with await connect(sshd) as s:
             data = os.urandom(200_000) + b"[tues-ok-abc]"
-            out = await s.run("cat", input=data, run_as="root", check=True)
+            out = await s.run(["cat"], input=data, user="root", stdout=tues.PIPE, check=True)
             assert out.stdout == data
 
     run(main())
 
 
-def test_spawn_streams(sshd):
+def test_create_subprocess_exec_streams(sshd):
     async def main():
         async with await connect(sshd) as s:
-            child = await s.spawn("cat")
-            assert await child.stdin.write(b"a\nb\n") == 4
-            await child.stdin.close()
-            assert await child.stdout.readline() == b"a\n"
-            assert await child.stdout.read_exact(1) == b"b"
-            assert await child.stdout.read() == b"\n"
-            status = await child.wait()
-            assert status.code == 0
-            assert child.poll().success
+            proc = await s.create_subprocess_exec("cat", stdin=tues.PIPE, stdout=tues.PIPE)
+            assert isinstance(proc, tues.Process)
+            assert isinstance(proc.stdout, asyncio.StreamReader)
+            assert proc.stderr is None and proc.pid is None and proc.returncode is None
+            proc.stdin.write(b"a\nb\n")
+            await proc.stdin.drain()
+            assert await proc.stdout.readline() == b"a\n"
+            assert await proc.stdout.readexactly(1) == b"b"
+            proc.stdin.close()
+            await proc.stdin.wait_closed()
+            assert proc.stdin.is_closing()
+            assert await proc.stdout.read() == b"\n"
+            assert proc.stdout.at_eof()
+            assert await proc.wait() == 0
+            assert proc.returncode == 0
 
     run(main())
 
 
-def test_communicate_and_kill(sshd):
+def test_create_subprocess_shell_iter_lines(sshd):
     async def main():
         async with await connect(sshd) as s:
-            child = await s.spawn("tr a-z A-Z", run_as="root")
-            out, err = await child.communicate(b"shout")
-            assert out == b"SHOUT" and err == b""
+            proc = await s.create_subprocess_shell("printf 'a\\nb\\nc'; echo err >&2", stdout=tues.PIPE, stderr=tues.PIPE)
+            lines = [line async for line in proc.stdout]
+            assert lines == [b"a\n", b"b\n", b"c"]
+            assert await proc.stderr.read() == b"err\n"
+            await proc.wait()
+            with pytest.raises(ValueError):
+                await s.create_subprocess_shell(["not", "a", "string"])
 
-            child = await s.spawn("sleep 30")
-            assert child.poll() is None
-            child.kill()
-            status = await child.wait()
-            assert status.signal == "KILL"
+    run(main())
+
+
+def test_large_output_flow_control(sshd):
+    async def main():
+        async with await connect(sshd) as s:
+            proc = await s.create_subprocess_exec("head", "-c", "3000000", "/dev/zero", stdout=tues.PIPE, limit=4096)
+            n = 0
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break
+                n += len(chunk)
+            assert n == 3_000_000
+            assert await proc.wait() == 0
+
+    run(main())
+
+
+def test_communicate_and_signals(sshd):
+    async def main():
+        async with await connect(sshd) as s:
+            proc = await s.create_subprocess_shell("tr a-z A-Z", user="root", stdin=tues.PIPE, stdout=tues.PIPE, stderr=tues.PIPE)
+            out, err = await proc.communicate(b"shout")
+            assert out == b"SHOUT" and err == b""
+            assert proc.returncode == 0
+
+            proc = await s.create_subprocess_exec("sleep", "30")
+            assert proc.returncode is None
+            proc.kill()
+            assert await proc.wait() == -signal.SIGKILL
+
+            proc = await s.create_subprocess_exec("sleep", "30")
+            proc.terminate()
+            assert await proc.wait() == -signal.SIGTERM
+
+            proc = await s.create_subprocess_exec("sleep", "30")
+            waiter = asyncio.create_task(proc.wait())
+            await asyncio.sleep(0.2)
+            proc.send_signal("USR1")  # while another task waits
+            assert await waiter == -signal.SIGUSR1
+
+            proc = await s.create_subprocess_exec("sleep", "30")
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), 0.3)
+            proc.kill()
+            assert await proc.wait() == -9
 
     run(main())
 
@@ -124,12 +199,13 @@ def test_sftp(sshd):
 def test_errors(sshd):
     async def main():
         with pytest.raises(tues.ConnectError):
-            await tues.AsyncSession.connect(
-                "127.0.0.1", **sshd.connect_kwargs(port=1, connect_timeout=2)
-            )
+            await tues.AsyncSession.connect("127.0.0.1", **sshd.connect_kwargs(port=1, connect_timeout=2))
         with pytest.raises(tues.AuthError):
             await connect(sshd, identity_files=[], password="wrong")
         with pytest.raises(ValueError):
             await tues.AsyncSession.connect("127.0.0.1", bogus=1, **sshd.connect_kwargs())
+        async with await connect(sshd) as s:
+            with pytest.raises(ValueError, match="stdout must be"):
+                await s.create_subprocess_exec("true", stdout=42)
 
     run(main())

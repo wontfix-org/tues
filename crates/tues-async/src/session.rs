@@ -42,7 +42,7 @@ pub(crate) struct Inner {
 impl std::fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Session")
-            .field("user", &self.inner.opts.user)
+            .field("login_user", &self.inner.opts.login_user)
             .field("host", &self.inner.opts.host_name)
             .field("port", &self.inner.opts.port)
             .finish()
@@ -153,9 +153,9 @@ impl Session {
         &self.inner.opts
     }
 
-    /// The SSH login user.
-    pub fn user(&self) -> &str {
-        &self.inner.opts.user
+    /// The login user.
+    pub fn login_user(&self) -> &str {
+        &self.inner.opts.login_user
     }
 
     /// The host name connected to.
@@ -163,9 +163,9 @@ impl Session {
         &self.inner.opts.host_name
     }
 
-    /// The default sudo user for commands that do not set one.
-    pub fn default_run_as(&self) -> Option<&str> {
-        self.inner.opts.run_as.as_deref()
+    /// The default user commands run as, or `None` for the login user.
+    pub fn user(&self) -> Option<&str> {
+        self.inner.opts.user.as_deref()
     }
 
     /// Build a command bound to this session.
@@ -211,9 +211,14 @@ impl Session {
     ) -> Result<Child> {
         self.ensure_open()?;
         let opts = &self.inner.opts;
-        let plan = cmd.plan(default_stdio, opts.run_as.as_deref());
+        let plan = cmd.plan(default_stdio, opts.user.as_deref());
         let password_request = plan.sudo.as_ref().map(|s| {
-            PasswordRequest::sudo(opts.alias.clone(), opts.port, opts.user.clone(), s.run_as.clone())
+            PasswordRequest::sudo(
+                opts.alias.clone(),
+                opts.port,
+                opts.login_user.clone(),
+                s.user.clone(),
+            )
         });
 
         let channel = self
@@ -424,9 +429,9 @@ pub(crate) async fn request_password(
 }
 
 async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions) -> Result<()> {
-    let user = opts.user.clone();
+    let login_user = opts.login_user.clone();
     let auth_err = |reason: String| Error::Auth {
-        user: user.clone(),
+        login_user: login_user.clone(),
         host: opts.host_name.clone(),
         reason,
     };
@@ -445,7 +450,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
     let mut tried: Vec<String> = Vec::new();
 
     // "none" first: succeeds on open servers and tells us the allowed methods.
-    match handle.authenticate_none(user.clone()).await.map_err(proto)? {
+    match handle.authenticate_none(login_user.clone()).await.map_err(proto)? {
         r if r.success() => return Ok(()),
         _ => {}
     }
@@ -462,7 +467,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
                         tried.push(format!("agent key {comment}"));
                         let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
                         match handle
-                            .authenticate_publickey_with(user.clone(), key, hash, &mut agent)
+                            .authenticate_publickey_with(login_user.clone(), key, hash, &mut agent)
                             .await
                         {
                             Ok(r) if r.success() => return Ok(()),
@@ -493,7 +498,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
             };
             let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
             let r = handle
-                .authenticate_publickey(user.clone(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                .authenticate_publickey(login_user.clone(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
                 .await
                 .map_err(proto)?;
             if r.success() {
@@ -504,7 +509,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
 
     // Password.
     if opts.password_authentication {
-        let req = PasswordRequest::login(opts.alias.clone(), opts.port, user.clone());
+        let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
         for attempt in 0..3u32 {
             tried.push("password".into());
             let pw = match request_password(&opts.password_manager, req.clone(), attempt > 0).await {
@@ -516,7 +521,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
             };
             use tues_core::ExposeSecret;
             let r = handle
-                .authenticate_password(user.clone(), pw.expose_secret().to_string())
+                .authenticate_password(login_user.clone(), pw.expose_secret().to_string())
                 .await
                 .map_err(proto)?;
             if r.success() {
@@ -532,10 +537,10 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
 
     // Keyboard-interactive, answering every prompt with the login password.
     if opts.kbd_interactive_authentication {
-        let req = PasswordRequest::login(opts.alias.clone(), opts.port, user.clone());
+        let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
         'outer: for attempt in 0..3u32 {
             let mut resp = handle
-                .authenticate_keyboard_interactive_start(user.clone(), None)
+                .authenticate_keyboard_interactive_start(login_user.clone(), None)
                 .await
                 .map_err(proto)?;
             let mut pw: Option<SecretString> = None;
@@ -617,7 +622,7 @@ async fn load_identity(path: &Path, opts: &ResolvedOptions) -> Result<PrivateKey
     let req = PasswordRequest::key_passphrase(
         opts.alias.clone(),
         opts.port,
-        opts.user.clone(),
+        opts.login_user.clone(),
         path.to_path_buf(),
     );
     debug_assert_eq!(req.kind, PasswordKind::KeyPassphrase);

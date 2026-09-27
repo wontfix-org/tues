@@ -26,19 +26,49 @@ pub struct Child {
     pub stderr: Option<ChildStderr>,
     ctrl: mpsc::UnboundedSender<Ctrl>,
     exit: Option<oneshot::Receiver<Result<ExitStatus>>>,
-    status: Option<ExitStatus>,
+    /// The final outcome once known; repeated `wait`/`try_wait` calls
+    /// return it again (including failures such as a rejected sudo password).
+    outcome: Option<Result<ExitStatus>>,
 }
 
 impl std::fmt::Debug for Child {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Child")
-            .field("status", &self.status)
+            .field("outcome", &self.outcome)
             .finish_non_exhaustive()
     }
 }
 
 enum Ctrl {
     Kill,
+    Signal(String),
+}
+
+/// A cheap, cloneable handle for signalling a running [`Child`].
+///
+/// Obtained from [`Child::signaller`]; lets one task wait on the child while
+/// another kills it.
+#[derive(Clone, Debug)]
+pub struct ChildSignaller {
+    ctrl: mpsc::UnboundedSender<Ctrl>,
+}
+
+impl ChildSignaller {
+    /// Send SIGKILL (if the server supports channel signals) and close the channel.
+    pub fn kill(&self) -> Result<()> {
+        self.ctrl.send(Ctrl::Kill).map_err(|_| Error::Disconnected)
+    }
+
+    /// Deliver a signal by name (`"TERM"`, `"INT"`, ...; no `SIG` prefix).
+    ///
+    /// Unlike [`ChildSignaller::kill`] the channel is left open so the
+    /// process may handle the signal and report its own exit status.
+    /// Servers that do not implement signal requests silently ignore it.
+    pub fn signal(&self, name: impl Into<String>) -> Result<()> {
+        self.ctrl
+            .send(Ctrl::Signal(name.into()))
+            .map_err(|_| Error::Disconnected)
+    }
 }
 
 impl Child {
@@ -46,22 +76,29 @@ impl Child {
     ///
     /// If stdout/stderr are piped and not being read, the remote process may
     /// block on a full pipe; use [`Child::wait_with_output`] instead.
+    ///
+    /// Cancel-safe: dropping the future (e.g. from a timeout) and calling
+    /// `wait` again later resumes waiting.
     pub async fn wait(&mut self) -> Result<ExitStatus> {
-        if let Some(s) = &self.status {
-            return Ok(s.clone());
+        if let Some(r) = &self.outcome {
+            return r.clone();
         }
-        let rx = self.exit.take().ok_or(Error::Disconnected)?;
-        let r = rx.await.map_err(|_| Error::Disconnected)?;
-        if let Ok(s) = &r {
-            self.status = Some(s.clone());
-        }
+        let rx = self.exit.as_mut().ok_or(Error::Disconnected)?;
+        let r = rx.await;
+        // The receiver is consumed once it has resolved.
+        self.exit = None;
+        let r = match r {
+            Ok(r) => r,
+            Err(_pump_gone) => Err(Error::Disconnected),
+        };
+        self.outcome = Some(r.clone());
         r
     }
 
     /// Non-blocking status check.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        if let Some(s) = &self.status {
-            return Ok(Some(s.clone()));
+        if let Some(r) = &self.outcome {
+            return r.clone().map(Some);
         }
         let Some(rx) = self.exit.as_mut() else {
             return Err(Error::Disconnected);
@@ -69,12 +106,15 @@ impl Child {
         match rx.try_recv() {
             Ok(r) => {
                 self.exit = None;
-                let s = r?;
-                self.status = Some(s.clone());
-                Ok(Some(s))
+                self.outcome = Some(r.clone());
+                r.map(Some)
             }
             Err(oneshot::error::TryRecvError::Empty) => Ok(None),
-            Err(oneshot::error::TryRecvError::Closed) => Err(Error::Disconnected),
+            Err(oneshot::error::TryRecvError::Closed) => {
+                self.exit = None;
+                self.outcome = Some(Err(Error::Disconnected));
+                Err(Error::Disconnected)
+            }
         }
     }
 
@@ -106,8 +146,20 @@ impl Child {
     }
 
     /// Send SIGKILL (if the server supports channel signals) and close the channel.
-    pub fn kill(&mut self) -> Result<()> {
-        self.ctrl.send(Ctrl::Kill).map_err(|_| Error::Disconnected)
+    pub fn kill(&self) -> Result<()> {
+        self.signaller().kill()
+    }
+
+    /// Deliver a signal by name; see [`ChildSignaller::signal`].
+    pub fn signal(&self, name: impl Into<String>) -> Result<()> {
+        self.signaller().signal(name)
+    }
+
+    /// A handle that can kill or signal this child from elsewhere.
+    pub fn signaller(&self) -> ChildSignaller {
+        ChildSignaller {
+            ctrl: self.ctrl.clone(),
+        }
     }
 
     /// Remote processes have no accessible pid over SSH.
@@ -339,7 +391,7 @@ pub(crate) fn spawn_child(
         stderr: stderr_rx.map(ChildStderr),
         ctrl: ctrl_tx,
         exit: Some(exit_rx),
-        status: None,
+        outcome: None,
     }
 }
 
@@ -453,6 +505,12 @@ async fn pump(
                         }
                         // Do not wait for the server's close confirmation.
                         machine.handle(Event::Close);
+                    }
+                    Some(Ctrl::Signal(name)) => {
+                        debug!(signal = %name, "signalling remote process");
+                        if !channel_gone && channel.signal(russh::Sig::Custom(name)).await.is_err() {
+                            channel_gone = true;
+                        }
                     }
                     None => {
                         // Child handle dropped. Keep pumping so the remote

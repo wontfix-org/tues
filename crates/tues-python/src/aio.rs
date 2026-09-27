@@ -1,6 +1,7 @@
 //! asyncio Python API.
 //!
-//! Every method returns an awaitable backed by a tokio future.
+//! Every method returns an awaitable backed by a tokio future. This is the
+//! low-level layer under `tues.AsyncSession` / `tues.Process`.
 
 use std::sync::Arc;
 
@@ -12,8 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::common::{
-    self, ExitStatus, Metadata, Output, check_output, command, connect_options, io_to_pyerr,
-    run_check, run_input, to_pyerr,
+    self, Metadata, command, connect_options, io_to_pyerr, returncode, signal_name, to_pyerr,
 };
 
 fn bytes(v: &[u8]) -> Py<PyBytes> {
@@ -21,7 +21,7 @@ fn bytes(v: &[u8]) -> Py<PyBytes> {
 }
 
 /// An asyncio SSH session.
-#[pyclass(name = "AsyncSession", module = "tues", skip_from_py_object)]
+#[pyclass(name = "AsyncSession", module = "tues._tues", skip_from_py_object)]
 #[derive(Clone)]
 pub struct AsyncSession {
     inner: tues_async::Session,
@@ -46,8 +46,8 @@ impl AsyncSession {
     }
 
     #[getter]
-    fn user(&self) -> String {
-        self.inner.user().to_string()
+    fn login_user(&self) -> String {
+        self.inner.login_user().to_string()
     }
 
     #[getter]
@@ -61,8 +61,8 @@ impl AsyncSession {
     }
 
     #[getter]
-    fn run_as(&self) -> Option<String> {
-        self.inner.default_run_as().map(str::to_string)
+    fn user(&self) -> Option<String> {
+        self.inner.user().map(str::to_string)
     }
 
     #[getter]
@@ -70,37 +70,17 @@ impl AsyncSession {
         self.inner.is_closed()
     }
 
-    /// Run `cmd` to completion. Same keyword arguments as `Session.run`.
-    #[pyo3(signature = (cmd, **kwargs))]
-    fn run<'py>(
-        &self,
-        py: Python<'py>,
-        cmd: &Bound<'py, PyAny>,
-        kwargs: Option<&Bound<'py, PyDict>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let c = command(cmd, kwargs)?;
-        let input = run_input(kwargs)?;
-        let check = run_check(kwargs)?;
-        let session = self.inner.clone();
-        future_into_py(py, async move {
-            let out = common::run_async(&session, c, input)
-                .await
-                .map_err(to_pyerr)?;
-            check_output(check, &out)?;
-            Ok(Python::attach(|py| Output::from_core(py, out)))
-        })
-    }
-
-    /// Spawn `cmd` and resolve to an `AsyncChild`. Same keyword arguments as
-    /// `Session.spawn`.
-    #[pyo3(signature = (cmd, **kwargs))]
+    /// Start a remote process; resolves to an `AsyncChild`. Same arguments
+    /// as `Session.spawn`.
+    #[pyo3(signature = (args, shell = false, **kwargs))]
     fn spawn<'py>(
         &self,
         py: Python<'py>,
-        cmd: &Bound<'py, PyAny>,
+        args: Vec<String>,
+        shell: bool,
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let c = command(cmd, kwargs)?;
+        let c = command(args, shell, kwargs)?;
         let session = self.inner.clone();
         future_into_py(py, async move {
             let mut child = session.spawn(&c).await.map_err(to_pyerr)?;
@@ -133,6 +113,7 @@ impl AsyncSession {
                     None => None,
                 };
                 Ok(AsyncChild {
+                    signaller: child.signaller(),
                     inner: Arc::new(Mutex::new(child)),
                     stdin,
                     stdout,
@@ -156,39 +137,21 @@ impl AsyncSession {
         future_into_py(py, async move { session.close().await.map_err(to_pyerr) })
     }
 
-    fn __aenter__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        future_into_py(py, async move { Ok(slf) })
-    }
-
-    #[pyo3(signature = (_exc_type, _exc, _tb))]
-    fn __aexit__<'py>(
-        &self,
-        py: Python<'py>,
-        _exc_type: Option<&Bound<'py, PyAny>>,
-        _exc: Option<&Bound<'py, PyAny>>,
-        _tb: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.inner.clone();
-        future_into_py(py, async move {
-            session.close().await.map_err(to_pyerr)?;
-            Ok(false)
-        })
-    }
-
     fn __repr__(&self) -> String {
         format!(
             "AsyncSession({}@{}:{})",
-            self.inner.user(),
+            self.inner.login_user(),
             self.inner.host(),
             self.inner.options().port
         )
     }
 }
 
-/// A running remote process (asyncio).
-#[pyclass(name = "AsyncChild", module = "tues")]
+/// A running remote process (raw asyncio handle; see `tues.Process`).
+#[pyclass(name = "AsyncChild", module = "tues._tues")]
 pub struct AsyncChild {
     inner: Arc<Mutex<tues_async::Child>>,
+    signaller: tues_async::ChildSignaller,
     stdin: Option<Py<AsyncChildStdin>>,
     stdout: Option<Py<AsyncChildStdout>>,
     stderr: Option<Py<AsyncChildStdout>>,
@@ -211,99 +174,67 @@ impl AsyncChild {
         self.stderr.as_ref().map(|s| s.clone_ref(py))
     }
 
-    /// Await the exit status.
+    /// Await the return code (negative signal number if killed).
     fn wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
-            inner.lock().await.wait().await.map(ExitStatus).map_err(to_pyerr)
+            let status = inner.lock().await.wait().await.map_err(to_pyerr)?;
+            Ok(returncode(&status))
         })
     }
 
-    /// Non-blocking status check.
-    fn poll(&self) -> PyResult<Option<ExitStatus>> {
-        let mut g = self
-            .inner
-            .try_lock()
-            .map_err(|_| PyValueError::new_err("child is busy"))?;
-        Ok(g.try_wait().map_err(to_pyerr)?.map(ExitStatus))
+    /// Non-blocking status check: the return code, or None while running
+    /// (or while another task is inside `wait()`).
+    fn poll(&self) -> PyResult<Option<i32>> {
+        match self.inner.try_lock() {
+            Ok(mut g) => Ok(g.try_wait().map_err(to_pyerr)?.as_ref().map(returncode)),
+            Err(_) => Ok(None),
+        }
     }
 
+    /// The return code if known, else None (alias of `poll()`).
+    #[getter]
+    fn returncode(&self) -> PyResult<Option<i32>> {
+        self.poll()
+    }
+
+    /// Send a signal by name ("TERM", "SIGTERM", ...).
+    fn send_signal(&self, name: &str) -> PyResult<()> {
+        self.signaller.signal(signal_name(name)?).map_err(to_pyerr)
+    }
+
+    /// Send SIGKILL and close the channel.
     fn kill(&self) -> PyResult<()> {
-        let mut g = self
-            .inner
-            .try_lock()
-            .map_err(|_| PyValueError::new_err("child is busy"))?;
-        g.kill().map_err(to_pyerr)
+        self.signaller.kill().map_err(to_pyerr)
     }
 
-    /// Write `input` to stdin, close it, drain stdout/stderr and wait.
-    /// Resolves to `(stdout, stderr)`.
-    #[pyo3(signature = (input = None))]
-    fn communicate<'py>(
-        &self,
-        py: Python<'py>,
-        input: Option<Vec<u8>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let stdin = self.stdin.as_ref().map(|s| s.borrow(py).inner.clone());
-        let stdout = self.stdout.as_ref().map(|s| s.borrow(py).inner.clone());
-        let stderr = self.stderr.as_ref().map(|s| s.borrow(py).inner.clone());
-        let inner = self.inner.clone();
-        future_into_py(py, async move {
-            let writer = async {
-                if let Some(s) = stdin
-                    && let Some(mut w) = s.lock().await.take()
-                {
-                    if let Some(data) = input {
-                        w.write_all(&data).await?;
-                    }
-                    w.shutdown().await?;
-                }
-                Ok::<_, std::io::Error>(())
-            };
-            let out_fut = async {
-                let mut v = Vec::new();
-                if let Some(s) = stdout {
-                    s.lock().await.read_to_end(&mut v).await?;
-                }
-                Ok::<_, std::io::Error>(v)
-            };
-            let err_fut = async {
-                let mut v = Vec::new();
-                if let Some(s) = stderr {
-                    s.lock().await.read_to_end(&mut v).await?;
-                }
-                Ok::<_, std::io::Error>(v)
-            };
-            let (_w, out, err) = tokio::join!(writer, out_fut, err_fut);
-            let out = out.map_err(io_to_pyerr)?;
-            let err = err.map_err(io_to_pyerr)?;
-            inner.lock().await.wait().await.map_err(to_pyerr)?;
-            Ok((bytes(&out), bytes(&err)))
-        })
+    fn __repr__(&self) -> String {
+        "AsyncChild(...)".to_string()
     }
 }
 
-/// Writable stdin of an `AsyncChild`.
-#[pyclass(name = "AsyncChildStdin", module = "tues")]
+/// Raw writable stdin of an `AsyncChild`.
+#[pyclass(name = "AsyncChildStdin", module = "tues._tues")]
 pub struct AsyncChildStdin {
     inner: Arc<Mutex<Option<tues_async::ChildStdin>>>,
 }
 
 #[pymethods]
 impl AsyncChildStdin {
+    /// Write all of `data`; resolves to the number of bytes written.
     fn write<'py>(&self, py: Python<'py>, data: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let mut g = inner.lock().await;
             let w = g
                 .as_mut()
-                .ok_or_else(|| PyValueError::new_err("stdin is closed"))?;
+                .ok_or_else(|| PyValueError::new_err("write to closed stdin"))?;
             w.write_all(&data).await.map_err(io_to_pyerr)?;
             Ok(data.len())
         })
     }
 
-    /// Send EOF.
+    /// Send EOF. Idempotent.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
@@ -312,6 +243,14 @@ impl AsyncChildStdin {
             }
             Ok(())
         })
+    }
+
+    #[getter]
+    fn closed(&self) -> bool {
+        match self.inner.try_lock() {
+            Ok(g) => g.is_none(),
+            Err(_) => false,
+        }
     }
 }
 
@@ -333,8 +272,8 @@ impl tokio::io::AsyncRead for Reader {
     }
 }
 
-/// Readable stdout/stderr of an `AsyncChild`.
-#[pyclass(name = "AsyncChildStdout", module = "tues")]
+/// Raw readable stdout/stderr of an `AsyncChild`.
+#[pyclass(name = "AsyncChildStdout", module = "tues._tues")]
 pub struct AsyncChildStdout {
     inner: Arc<Mutex<Reader>>,
 }
@@ -361,47 +300,6 @@ impl AsyncChildStdout {
             Ok(bytes(&v))
         })
     }
-
-    /// Read exactly `n` bytes (fewer only at EOF).
-    fn read_exact<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        future_into_py(py, async move {
-            let mut g = inner.lock().await;
-            let mut out = Vec::with_capacity(n);
-            let mut buf = vec![0u8; 16 * 1024];
-            while out.len() < n {
-                let want = (n - out.len()).min(buf.len());
-                let got = g.read(&mut buf[..want]).await.map_err(io_to_pyerr)?;
-                if got == 0 {
-                    break;
-                }
-                out.extend_from_slice(&buf[..got]);
-            }
-            Ok(bytes(&out))
-        })
-    }
-
-    /// Read one line including the newline (empty at EOF).
-    fn readline<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        future_into_py(py, async move {
-            let mut g = inner.lock().await;
-            let mut out = Vec::new();
-            loop {
-                match g.read_u8().await {
-                    Ok(b) => {
-                        out.push(b);
-                        if b == b'\n' {
-                            break;
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(io_to_pyerr(e)),
-                }
-            }
-            Ok(bytes(&out))
-        })
-    }
 }
 
 /// asyncio SFTP session.
@@ -422,7 +320,10 @@ impl AsyncSftp {
 
     fn read_text<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.read_to_string(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.read_to_string(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn write<'py>(
@@ -432,7 +333,10 @@ impl AsyncSftp {
         data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.write(path, &data).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.write(path, &data).await.map_err(to_pyerr) },
+        )
     }
 
     #[pyo3(signature = (path, mode = "r"))]
@@ -457,17 +361,26 @@ impl AsyncSftp {
 
     fn mkdir<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.create_dir(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.create_dir(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn remove<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.remove_file(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.remove_file(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn rmdir<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.remove_dir(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.remove_dir(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn rename<'py>(
@@ -477,7 +390,10 @@ impl AsyncSftp {
         dst: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.rename(src, dst).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.rename(src, dst).await.map_err(to_pyerr) },
+        )
     }
 
     fn symlink<'py>(
@@ -487,7 +403,9 @@ impl AsyncSftp {
         link: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.symlink(target, link).await.map_err(to_pyerr) })
+        future_into_py(py, async move {
+            s.symlink(target, link).await.map_err(to_pyerr)
+        })
     }
 
     fn readlink<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
@@ -514,12 +432,18 @@ impl AsyncSftp {
 
     fn exists<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.try_exists(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.try_exists(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn realpath<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
         let s = self.inner.clone();
-        future_into_py(py, async move { s.canonicalize(path).await.map_err(to_pyerr) })
+        future_into_py(
+            py,
+            async move { s.canonicalize(path).await.map_err(to_pyerr) },
+        )
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

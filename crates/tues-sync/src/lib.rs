@@ -15,7 +15,7 @@
 //!
 //! # fn run() -> tues_core::Result<()> {
 //! let session = Session::connect(ConnectOptions::new("alice@web01"))?;
-//! let out = session.command("id").run_as("root").output()?;
+//! let out = session.command("id").user("root").output()?;
 //! println!("{}", out.stdout_lossy());
 //! # Ok(()) }
 //! ```
@@ -25,7 +25,7 @@ mod command;
 mod session;
 mod sftp;
 
-pub use child::{Child, ChildStderr, ChildStdin, ChildStdout};
+pub use child::{Child, ChildSignaller, ChildStderr, ChildStdin, ChildStdout};
 pub use command::Command;
 pub use session::Session;
 pub use sftp::{File, Sftp};

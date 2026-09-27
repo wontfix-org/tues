@@ -87,7 +87,8 @@ pub struct SshConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostParams {
     pub host_name: Option<String>,
-    pub user: Option<String>,
+    /// Login user, from the `User` directive.
+    pub login_user: Option<String>,
     pub port: Option<u16>,
     pub identity_file: Vec<PathBuf>,
     pub identities_only: Option<bool>,
@@ -247,16 +248,17 @@ impl SshConfig {
             }
         }
         let hostname = p.host_name.clone().unwrap_or_else(|| host.to_string());
-        let user = p.user.clone().unwrap_or_else(local_user);
+        let login_user = p.login_user.clone().unwrap_or_else(local_user);
         let port = p.port.unwrap_or(22);
-        p.host_name = Some(expand_tokens(&hostname, host, &hostname, &user, port));
+        p.host_name = Some(expand_tokens(&hostname, host, &hostname, &login_user, port));
         p.identity_file = identity_raw
             .iter()
-            .map(|f| expand_path(&expand_tokens(f, host, &hostname, &user, port)))
+            .map(|f| expand_path(&expand_tokens(f, host, &hostname, &login_user, port)))
             .collect();
         if let Some(k) = &p.user_known_hosts_file {
             let s = k.to_string_lossy().into_owned();
-            p.user_known_hosts_file = Some(expand_path(&expand_tokens(&s, host, &hostname, &user, port)));
+            p.user_known_hosts_file =
+                Some(expand_path(&expand_tokens(&s, host, &hostname, &login_user, port)));
         }
         p
     }
@@ -272,7 +274,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
     }
     match key {
         "hostname" => first!(p.host_name, Some(value.to_string())),
-        "user" => first!(p.user, Some(value.to_string())),
+        "user" => first!(p.login_user, Some(value.to_string())),
         "port" => first!(p.port, value.parse().ok()),
         "identityfile" => identity_raw.push(value.to_string()),
         "identitiesonly" => first!(p.identities_only, yes_no(value)),
@@ -362,7 +364,7 @@ fn split_words(s: &str) -> Vec<String> {
     words
 }
 
-fn expand_tokens(s: &str, alias: &str, hostname: &str, user: &str, port: u16) -> String {
+fn expand_tokens(s: &str, alias: &str, hostname: &str, login_user: &str, port: u16) -> String {
     if !s.contains('%') {
         return s.to_string();
     }
@@ -377,7 +379,7 @@ fn expand_tokens(s: &str, alias: &str, hostname: &str, user: &str, port: u16) ->
             Some('%') => out.push('%'),
             Some('h') => out.push_str(hostname),
             Some('n') => out.push_str(alias),
-            Some('r') => out.push_str(user),
+            Some('r') => out.push_str(login_user),
             Some('p') => out.push_str(&port.to_string()),
             Some('u') => out.push_str(&local_user()),
             Some('d') => out.push_str(&home_dir().to_string_lossy()),
@@ -502,7 +504,7 @@ Host *
         let cfg = SshConfig::parse_str(text, None).unwrap();
         let p = cfg.query("web01");
         assert_eq!(p.host_name.as_deref(), Some("10.0.0.1"));
-        assert_eq!(p.user.as_deref(), Some("alice"));
+        assert_eq!(p.login_user.as_deref(), Some("alice"));
         assert_eq!(p.port, Some(2222));
         assert_eq!(
             p.identity_file,
@@ -516,12 +518,12 @@ Host *
         assert_eq!(p.unknown, vec![("somethingunknown".to_string(), "value".to_string())]);
 
         let p = cfg.query("web02");
-        assert_eq!(p.user.as_deref(), Some("bob"));
+        assert_eq!(p.login_user.as_deref(), Some("bob"));
         assert_eq!(p.host_name.as_deref(), Some("web02"));
         assert_eq!(p.port, None);
 
         let p = cfg.query("db");
-        assert_eq!(p.user.as_deref(), Some("carol"));
+        assert_eq!(p.login_user.as_deref(), Some("carol"));
         assert!(p.proxy_jump.is_none());
     }
 
@@ -531,7 +533,7 @@ Host *
         let cfg = SshConfig::parse_str(text, None).unwrap();
         assert_eq!(cfg.query("x").proxy_jump, Some(vec!["bastion".into()]));
         assert_eq!(cfg.query("bastion").proxy_jump, None);
-        assert_eq!(cfg.query("bastion").user.as_deref(), Some("root"));
+        assert_eq!(cfg.query("bastion").login_user.as_deref(), Some("root"));
     }
 
     #[test]
@@ -548,7 +550,7 @@ Host *
     fn match_blocks_are_skipped_except_all() {
         let text = "Match exec \"true\"\n  User skipped\nMatch all\n  User everyone\n";
         let cfg = SshConfig::parse_str(text, None).unwrap();
-        assert_eq!(cfg.query("x").user.as_deref(), Some("everyone"));
+        assert_eq!(cfg.query("x").login_user.as_deref(), Some("everyone"));
     }
 
     #[test]
@@ -569,7 +571,7 @@ Host *
         )
         .unwrap();
         let p = cfg.query("inc");
-        assert_eq!(p.user.as_deref(), Some("me"));
+        assert_eq!(p.login_user.as_deref(), Some("me"));
         // Includes are spliced in file order: a.conf (Host inc, Port 2200)
         // precedes b.conf (no Host line, inherits Host inc, Port 9).
         assert_eq!(p.port, Some(2200));

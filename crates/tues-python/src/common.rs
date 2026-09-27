@@ -5,20 +5,24 @@ use std::time::{Duration, SystemTime};
 
 use pyo3::conversion::FromPyObjectOwned;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyDict, PyList};
 
 use tues_core::{
-    ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, PasswordKind,
-    PasswordManager, PasswordPrompter, SecretString, SshConfigSource, StaticPasswordManager,
-    Stdio, shared,
+    ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, PasswordKind, PasswordManager,
+    PasswordPrompter, SecretString, SshConfigSource, StaticPasswordManager, Stdio, shared,
 };
 
 create_exception!(tues, TuesError, PyException, "Base class for tues errors.");
 create_exception!(tues, ConnectError, TuesError, "Connection failed.");
 create_exception!(tues, AuthError, TuesError, "Authentication failed.");
-create_exception!(tues, HostKeyError, TuesError, "Host key unknown or changed.");
+create_exception!(
+    tues,
+    HostKeyError,
+    TuesError,
+    "Host key unknown or changed."
+);
 create_exception!(tues, SudoError, TuesError, "Privilege elevation failed.");
 create_exception!(tues, SftpError, TuesError, "SFTP operation failed.");
 
@@ -64,7 +68,9 @@ fn check_keys(kwargs: Option<&Bound<'_, PyDict>>, allowed: &[&str]) -> PyResult<
         for k in d.keys() {
             let k: String = k.extract()?;
             if !allowed.contains(&k.as_str()) {
-                return Err(PyValueError::new_err(format!("unexpected keyword argument {k:?}")));
+                return Err(PyValueError::new_err(format!(
+                    "unexpected keyword argument {k:?}"
+                )));
             }
         }
     }
@@ -72,88 +78,62 @@ fn check_keys(kwargs: Option<&Bound<'_, PyDict>>, allowed: &[&str]) -> PyResult<
 }
 
 // ---------------------------------------------------------------------------
-// Exit status / output
+// Exit status
 // ---------------------------------------------------------------------------
 
-/// Exit status of a remote process.
-#[pyclass(name = "ExitStatus", module = "tues", frozen, skip_from_py_object)]
-#[derive(Clone)]
-pub struct ExitStatus(pub tues_core::ExitStatus);
-
-#[pymethods]
-impl ExitStatus {
-    /// Exit code, or None if killed by a signal.
-    #[getter]
-    fn code(&self) -> Option<i32> {
-        self.0.code()
-    }
-
-    /// Signal name (without SIG), or None.
-    #[getter]
-    fn signal(&self) -> Option<String> {
-        self.0.signal().map(str::to_string)
-    }
-
-    #[getter]
-    fn success(&self) -> bool {
-        self.0.success()
-    }
-
-    fn __bool__(&self) -> bool {
-        self.0.success()
-    }
-
-    fn __repr__(&self) -> String {
-        format!("ExitStatus({})", self.0)
-    }
+/// Linux signal numbers for the names SSH servers report in `exit-signal`.
+fn signal_number(name: &str) -> Option<i32> {
+    // OpenSSH may suffix non-standard names with "@domain"; be lenient about
+    // a "SIG" prefix too.
+    let name = name.split('@').next().unwrap_or(name);
+    let name = name.strip_prefix("SIG").unwrap_or(name);
+    Some(match name {
+        "HUP" => 1,
+        "INT" => 2,
+        "QUIT" => 3,
+        "ILL" => 4,
+        "TRAP" => 5,
+        "ABRT" | "IOT" => 6,
+        "BUS" => 7,
+        "FPE" => 8,
+        "KILL" => 9,
+        "USR1" => 10,
+        "SEGV" => 11,
+        "USR2" => 12,
+        "PIPE" => 13,
+        "ALRM" => 14,
+        "TERM" => 15,
+        "STKFLT" => 16,
+        "CHLD" => 17,
+        "CONT" => 18,
+        "STOP" => 19,
+        "TSTP" => 20,
+        "TTIN" => 21,
+        "TTOU" => 22,
+        "URG" => 23,
+        "XCPU" => 24,
+        "XFSZ" => 25,
+        "VTALRM" => 26,
+        "PROF" => 27,
+        "WINCH" => 28,
+        "IO" | "POLL" => 29,
+        "PWR" => 30,
+        "SYS" => 31,
+        _ => return None,
+    })
 }
 
-/// Captured output of a finished remote process.
-#[pyclass(name = "Output", module = "tues", frozen)]
-pub struct Output {
-    #[pyo3(get)]
-    pub status: ExitStatus,
-    #[pyo3(get)]
-    pub stdout: Py<PyBytes>,
-    #[pyo3(get)]
-    pub stderr: Py<PyBytes>,
-}
-
-impl Output {
-    pub fn from_core(py: Python<'_>, o: tues_core::Output) -> Self {
-        Output {
-            status: ExitStatus(o.status),
-            stdout: PyBytes::new(py, &o.stdout).unbind(),
-            stderr: PyBytes::new(py, &o.stderr).unbind(),
-        }
-    }
-}
-
-#[pymethods]
-impl Output {
-    /// Exit code (None if killed by a signal).
-    #[getter]
-    fn returncode(&self) -> Option<i32> {
-        self.status.0.code()
-    }
-
-    #[getter]
-    fn success(&self) -> bool {
-        self.status.0.success()
-    }
-
-    /// stdout decoded as UTF-8 (lossy).
-    fn text(&self, py: Python<'_>) -> String {
-        String::from_utf8_lossy(self.stdout.bind(py).as_bytes()).into_owned()
-    }
-
-    fn __repr__(&self, py: Python<'_>) -> String {
-        format!(
-            "Output(status={}, stdout={} bytes, stderr={} bytes)",
-            self.status.0,
-            self.stdout.bind(py).len().unwrap_or(0),
-            self.stderr.bind(py).len().unwrap_or(0)
-        )
+/// `subprocess`-style return code: the exit code, or `-N` when the process
+/// was terminated by signal `N`. Signals that cannot be mapped to a number
+/// become `-1`.
+pub fn returncode(status: &tues_core::ExitStatus) -> i32 {
+    match status.code() {
+        Some(c) => c,
+        None => status
+            .signal()
+            .and_then(signal_number)
+            .map(|n| -n)
+            .unwrap_or(-1),
     }
 }
 
@@ -217,7 +197,10 @@ impl Metadata {
         to_epoch(self.0.accessed)
     }
     fn __repr__(&self) -> String {
-        format!("Metadata(size={}, type={:?})", self.0.size, self.0.file_type)
+        format!(
+            "Metadata(size={}, type={:?})",
+            self.0.size, self.0.file_type
+        )
     }
 }
 
@@ -284,12 +267,13 @@ impl PasswordRequest {
         self.0.port
     }
     #[getter]
-    fn user(&self) -> &str {
-        &self.0.user
+    fn login_user(&self) -> &str {
+        &self.0.login_user
     }
+    /// The user the command runs as, for a sudo request.
     #[getter]
-    fn run_as(&self) -> Option<&str> {
-        self.0.run_as.as_deref()
+    fn user(&self) -> Option<&str> {
+        self.0.user.as_deref()
     }
     #[getter]
     fn key_path(&self) -> Option<String> {
@@ -302,6 +286,22 @@ impl PasswordRequest {
     }
     fn __repr__(&self) -> String {
         format!("PasswordRequest({:?})", self.0.prompt_text().trim_end())
+    }
+}
+
+/// The type of the `LOGIN_USER` sentinel.
+///
+/// Passing `user=LOGIN_USER` to a command runs it as the login user, never
+/// via `sudo`, even when the session has a default user. It is the Python
+/// spelling of [`tues_core::CommandUser::LoginUser`]; a string is
+/// `CommandUser::User` and leaving `user` out is `CommandUser::Inherit`.
+#[pyclass(frozen, module = "tues", name = "LoginUser")]
+pub struct LoginUser;
+
+#[pymethods]
+impl LoginUser {
+    fn __repr__(&self) -> &'static str {
+        "tues.LOGIN_USER"
     }
 }
 
@@ -363,9 +363,9 @@ impl PasswordManager for PyPasswordSource {
 // ---------------------------------------------------------------------------
 
 const CONNECT_KEYS: &[&str] = &[
-    "user",
+    "login_user",
     "port",
-    "run_as",
+    "user",
     "host_name",
     "identity_files",
     "identities_only",
@@ -393,9 +393,9 @@ pub fn connect_options(
 ) -> PyResult<ConnectOptions> {
     check_keys(kwargs, CONNECT_KEYS)?;
     let mut o = ConnectOptions::new(destination);
-    o.user = kw(kwargs, "user")?;
+    o.login_user = kw(kwargs, "login_user")?;
     o.port = kw(kwargs, "port")?;
-    o.run_as = kw(kwargs, "run_as")?;
+    o.user = kw(kwargs, "user")?;
     o.host_name = kw(kwargs, "host_name")?;
     if let Some(files) = kw::<Vec<PathBuf>>(kwargs, "identity_files")? {
         o.identity_files = files;
@@ -416,10 +416,9 @@ pub fn connect_options(
     o.pubkey_authentication = kw(kwargs, "pubkey_authentication")?;
     o.password_authentication = kw(kwargs, "password_authentication")?;
     if let Some(p) = kw::<String>(kwargs, "host_key_policy")? {
-        o.host_key_policy = Some(
-            HostKeyPolicy::parse(&p)
-                .ok_or_else(|| PyValueError::new_err(format!("host_key_policy: unknown value {p:?}")))?,
-        );
+        o.host_key_policy = Some(HostKeyPolicy::parse(&p).ok_or_else(|| {
+            PyValueError::new_err(format!("host_key_policy: unknown value {p:?}"))
+        })?);
     }
     o.known_hosts_file = kw(kwargs, "known_hosts_file")?;
     if let Some(d) = kwargs
@@ -465,54 +464,62 @@ pub fn connect_options(
 // Command from Python
 // ---------------------------------------------------------------------------
 
-const COMMAND_KEYS: &[&str] = &[
-    "run_as",
-    "run_as_login_user",
-    "pty",
-    "env",
-    "cwd",
-    "stdin",
-    "stdout",
-    "stderr",
-    "input",
-    "check",
-];
+const COMMAND_KEYS: &[&str] = &["user", "pty", "env", "cwd", "stdin", "stdout", "stderr"];
 
-pub fn parse_stdio(v: &str) -> PyResult<Stdio> {
+/// `subprocess.PIPE`.
+pub const PIPE: i32 = -1;
+/// `subprocess.STDOUT` (handled in the Python layer; rejected here).
+pub const STDOUT: i32 = -2;
+/// `subprocess.DEVNULL`.
+pub const DEVNULL: i32 = -3;
+
+/// Map a `subprocess`-style stdio argument (`None`, `PIPE`, `DEVNULL`) to
+/// [`Stdio`]. `None` means "inherit the local process stream".
+fn parse_stdio(name: &str, v: Option<i32>) -> PyResult<Stdio> {
     match v {
-        "pipe" | "piped" => Ok(Stdio::Piped),
-        "null" | "devnull" => Ok(Stdio::Null),
-        "inherit" => Ok(Stdio::Inherit),
-        other => Err(PyValueError::new_err(format!(
-            "stdio must be 'pipe', 'null' or 'inherit', not {other:?}"
+        None => Ok(Stdio::Inherit),
+        Some(PIPE) => Ok(Stdio::Piped),
+        Some(DEVNULL) => Ok(Stdio::Null),
+        Some(STDOUT) => Err(PyValueError::new_err(format!(
+            "{name}: STDOUT is only valid for stderr and is resolved by the Python layer"
+        ))),
+        Some(other) => Err(PyValueError::new_err(format!(
+            "{name}: expected None, PIPE or DEVNULL, not {other}"
         ))),
     }
 }
 
-/// Build a command from `str` (shell line) or `list[str]` (argv) plus kwargs.
+/// Build a command from an argv list plus kwargs.
+///
+/// With `shell=True`, `argv[0]` is a shell script run by `sh -c` and the
+/// remaining elements become its positional parameters (`$0`, `$1`, ...),
+/// exactly like `subprocess` with `shell=True`.
 pub fn command(
-    cmd: &Bound<'_, PyAny>,
+    argv: Vec<String>,
+    shell: bool,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<tues_core::Command> {
     check_keys(kwargs, COMMAND_KEYS)?;
-    let mut c = if let Ok(s) = cmd.extract::<String>() {
-        tues_core::Command::shell(s)
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| PyValueError::new_err("args must not be empty"))?;
+    let mut c = if shell {
+        tues_core::Command::shell(program)
     } else {
-        let argv: Vec<String> = cmd.extract().map_err(|_| {
-            PyValueError::new_err("command must be a str or a non-empty list of str")
-        })?;
-        let (program, args) = argv
-            .split_first()
-            .ok_or_else(|| PyValueError::new_err("command list must not be empty"))?;
-        let mut c = tues_core::Command::new(program);
-        c.args(args.iter().cloned());
-        c
+        tues_core::Command::new(program)
     };
-    if let Some(u) = kw::<String>(kwargs, "run_as")? {
-        c.run_as(u);
-    }
-    if kw::<bool>(kwargs, "run_as_login_user")?.unwrap_or(false) {
-        c.run_as_login_user();
+    c.args(args.iter().cloned());
+    if let Some(u) = kw::<Bound<'_, PyAny>>(kwargs, "user")? {
+        if u.is_instance_of::<LoginUser>() {
+            c.as_login_user();
+        } else if let Ok(name) = u.extract::<String>() {
+            c.user(name);
+        } else {
+            return Err(PyTypeError::new_err(format!(
+                "user must be a str or LOGIN_USER, not {}",
+                u.get_type().name()?
+            )));
+        }
     }
     if kw::<bool>(kwargs, "pty")?.unwrap_or(false) {
         c.pty(true);
@@ -528,72 +535,31 @@ pub fn command(
     if let Some(d) = kw::<String>(kwargs, "cwd")? {
         c.current_dir(d);
     }
-    if let Some(s) = kw::<String>(kwargs, "stdin")? {
-        c.stdin(parse_stdio(&s)?);
-    }
-    if let Some(s) = kw::<String>(kwargs, "stdout")? {
-        c.stdout(parse_stdio(&s)?);
-    }
-    if let Some(s) = kw::<String>(kwargs, "stderr")? {
-        c.stderr(parse_stdio(&s)?);
-    }
+    c.stdin(parse_stdio("stdin", kw(kwargs, "stdin")?)?);
+    c.stdout(parse_stdio("stdout", kw(kwargs, "stdout")?)?);
+    c.stderr(parse_stdio("stderr", kw(kwargs, "stderr")?)?);
     Ok(c)
 }
 
-/// The `input=` bytes for `run`, if any.
-pub fn run_input(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<Vec<u8>>> {
-    kw::<Vec<u8>>(kwargs, "input")
+/// Convert an optional Python timeout (seconds) to a `Duration`.
+pub fn timeout_duration(timeout: Option<f64>) -> Option<Duration> {
+    timeout.map(|t| Duration::from_secs_f64(t.max(0.0)))
 }
 
-/// The `check=` flag for `run`.
-pub fn run_check(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
-    Ok(kw::<bool>(kwargs, "check")?.unwrap_or(false))
-}
-
-/// Run a command to completion, feeding `input` to stdin concurrently.
-pub async fn run_async(
-    session: &tues_async::Session,
-    mut cmd: tues_core::Command,
-    input: Option<Vec<u8>>,
-) -> tues_core::Result<tues_core::Output> {
-    use tokio::io::AsyncWriteExt;
-    match input {
-        None => session.output(&cmd).await,
-        Some(data) => {
-            cmd.stdin(Stdio::Piped);
-            if cmd.get_stdout().is_none() {
-                cmd.stdout(Stdio::Piped);
-            }
-            if cmd.get_stderr().is_none() {
-                cmd.stderr(Stdio::Piped);
-            }
-            let mut child = session.spawn(&cmd).await?;
-            let mut stdin = child.stdin.take();
-            let writer = async move {
-                if let Some(s) = stdin.as_mut() {
-                    s.write_all(&data).await?;
-                    s.shutdown().await?;
-                }
-                Ok::<_, std::io::Error>(())
-            };
-            let (w, out) = tokio::join!(writer, child.wait_with_output());
-            // A closed pipe while writing means the command exited early; the
-            // output/status tells the caller what happened.
-            let _ = w;
-            out
-        }
-    }
-}
-
-pub fn check_output(check: bool, out: &tues_core::Output) -> PyResult<()> {
-    if check && !out.status.success() {
-        return Err(TuesError::new_err(format!(
-            "command failed with {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim_end()
+/// Normalise a signal name for the SSH `signal` request: accepts `"TERM"`
+/// or `"SIGTERM"`.
+pub fn signal_name(name: &str) -> PyResult<String> {
+    let name = name.strip_prefix("SIG").unwrap_or(name);
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '@' || c == '.' || c == '-')
+    {
+        return Err(PyValueError::new_err(format!(
+            "invalid signal name {name:?}"
         )));
     }
-    Ok(())
+    Ok(name.to_string())
 }
 
 /// Parse a Python-style open mode into [`tues_core::OpenOptions`].
@@ -615,7 +581,9 @@ pub fn open_options(mode: &str) -> PyResult<tues_core::OpenOptions> {
 
 pub fn seek_from(offset: i64, whence: i32) -> PyResult<std::io::SeekFrom> {
     Ok(match whence {
-        0 => std::io::SeekFrom::Start(u64::try_from(offset).map_err(|_| PyValueError::new_err("negative seek"))?),
+        0 => std::io::SeekFrom::Start(
+            u64::try_from(offset).map_err(|_| PyValueError::new_err("negative seek"))?,
+        ),
         1 => std::io::SeekFrom::Current(offset),
         2 => std::io::SeekFrom::End(offset),
         _ => return Err(PyValueError::new_err("whence must be 0, 1 or 2")),

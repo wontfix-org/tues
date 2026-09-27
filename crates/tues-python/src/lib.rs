@@ -1,8 +1,9 @@
 //! Python bindings for `tues`.
 //!
-//! Exposes a blocking API (`Session`, `Child`, `Sftp`, `File`) built on
-//! `tues-sync`, and an asyncio API (`AsyncSession`, `AsyncChild`,
-//! `AsyncSftp`, `AsyncFile`) built on `tues-async`.
+//! This extension module (`tues._tues`) is the low-level layer: sessions,
+//! raw child handles with byte pipes, SFTP. The `subprocess`-shaped public
+//! API (`tues.Session.run`, `tues.Popen`, `tues.CompletedProcess`, text
+//! mode, timeouts, ...) is implemented in the Python package on top of it.
 
 use pyo3::prelude::*;
 
@@ -14,6 +15,12 @@ mod sync;
 fn _tues(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
+    m.add("PIPE", common::PIPE)?;
+    m.add("STDOUT", common::STDOUT)?;
+    m.add("DEVNULL", common::DEVNULL)?;
+    m.add_class::<common::LoginUser>()?;
+    m.add("LOGIN_USER", Py::new(py, common::LoginUser)?)?;
+
     m.add("TuesError", py.get_type::<common::TuesError>())?;
     m.add("ConnectError", py.get_type::<common::ConnectError>())?;
     m.add("AuthError", py.get_type::<common::AuthError>())?;
@@ -21,8 +28,6 @@ fn _tues(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SudoError", py.get_type::<common::SudoError>())?;
     m.add("SftpError", py.get_type::<common::SftpError>())?;
 
-    m.add_class::<common::ExitStatus>()?;
-    m.add_class::<common::Output>()?;
     m.add_class::<common::Metadata>()?;
     m.add_class::<common::DirEntry>()?;
     m.add_class::<common::PasswordRequest>()?;

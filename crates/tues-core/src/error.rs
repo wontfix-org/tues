@@ -23,9 +23,9 @@ pub enum Error {
     #[error("connection to {host}:{port} timed out")]
     ConnectTimeout { host: String, port: u16 },
 
-    #[error("authentication failed for {user}@{host}: {reason}")]
+    #[error("authentication failed for {login_user}@{host}: {reason}")]
     Auth {
-        user: String,
+        login_user: String,
         host: String,
         reason: String,
     },
@@ -57,6 +57,49 @@ pub enum Error {
 
     #[error("{0}")]
     Other(String),
+}
+
+impl Clone for Error {
+    /// `std::io::Error` is not `Clone`; the copy keeps its kind and message.
+    fn clone(&self) -> Self {
+        match self {
+            Error::Io(e) => Error::Io(std::io::Error::new(e.kind(), e.to_string())),
+            Error::Config(s) => Error::Config(s.clone()),
+            Error::Connect { host, port, reason } => Error::Connect {
+                host: host.clone(),
+                port: *port,
+                reason: reason.clone(),
+            },
+            Error::ConnectTimeout { host, port } => Error::ConnectTimeout {
+                host: host.clone(),
+                port: *port,
+            },
+            Error::Auth {
+                login_user,
+                host,
+                reason,
+            } => Error::Auth {
+                login_user: login_user.clone(),
+                host: host.clone(),
+                reason: reason.clone(),
+            },
+            Error::UnknownHostKey { host, port } => Error::UnknownHostKey {
+                host: host.clone(),
+                port: *port,
+            },
+            Error::HostKeyChanged { host, port, line } => Error::HostKeyChanged {
+                host: host.clone(),
+                port: *port,
+                line: *line,
+            },
+            Error::Sudo(e) => Error::Sudo(e.clone()),
+            Error::Password(s) => Error::Password(s.clone()),
+            Error::Sftp(s) => Error::Sftp(s.clone()),
+            Error::Protocol(s) => Error::Protocol(s.clone()),
+            Error::Disconnected => Error::Disconnected,
+            Error::Other(s) => Error::Other(s.clone()),
+        }
+    }
 }
 
 impl Error {

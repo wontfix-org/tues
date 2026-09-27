@@ -36,7 +36,7 @@ class Sshd:
 
     def connect_kwargs(self, **overrides):
         kw = dict(
-            user=USER,
+            login_user=USER,
             port=self.port,
             identity_files=[self.key_path],
             identities_only=True,

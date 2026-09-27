@@ -84,13 +84,15 @@ impl Command {
         self
     }
 
-    pub fn run_as(mut self, user: impl Into<String>) -> Self {
-        self.inner.run_as(user);
+    /// Run as `user` via `sudo -u`.
+    pub fn user(mut self, user: impl Into<String>) -> Self {
+        self.inner.user(user);
         self
     }
 
-    pub fn run_as_login_user(mut self) -> Self {
-        self.inner.run_as_login_user();
+    /// Run as the login user even if the session has a default user.
+    pub fn as_login_user(mut self) -> Self {
+        self.inner.as_login_user();
         self
     }
 

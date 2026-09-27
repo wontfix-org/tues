@@ -3,7 +3,7 @@
 //! Drivers never read passwords themselves. They ask a [`PasswordManager`],
 //! which can be replaced by any implementation. The default is
 //! [`MemoizingPasswordManager`] wrapping a [`TtyPrompter`]: it prompts once on
-//! `/dev/tty` and remembers the answer per (kind, host, user, run-as) until
+//! `/dev/tty` and remembers the answer per (kind, host, login user) until
 //! a driver reports that it was rejected.
 
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 pub enum PasswordKind {
     /// SSH password / keyboard-interactive authentication of the login user.
     Login,
-    /// The login user's password as required by `sudo`.
+    /// The login user's password as required by `sudo` to become `user`.
     Sudo,
     /// Passphrase for an encrypted private key file.
     KeyPassphrase,
@@ -33,22 +33,22 @@ pub struct PasswordRequest {
     pub kind: PasswordKind,
     pub host: String,
     pub port: u16,
-    /// The SSH login user.
-    pub user: String,
-    /// The sudo target user (for [`PasswordKind::Sudo`]).
-    pub run_as: Option<String>,
+    /// The login user.
+    pub login_user: String,
+    /// The user the command runs as (for [`PasswordKind::Sudo`]).
+    pub user: Option<String>,
     /// The key file (for [`PasswordKind::KeyPassphrase`]).
     pub key_path: Option<PathBuf>,
 }
 
 impl PasswordRequest {
-    pub fn login(host: impl Into<String>, port: u16, user: impl Into<String>) -> Self {
+    pub fn login(host: impl Into<String>, port: u16, login_user: impl Into<String>) -> Self {
         PasswordRequest {
             kind: PasswordKind::Login,
             host: host.into(),
             port,
-            user: user.into(),
-            run_as: None,
+            login_user: login_user.into(),
+            user: None,
             key_path: None,
         }
     }
@@ -56,15 +56,15 @@ impl PasswordRequest {
     pub fn sudo(
         host: impl Into<String>,
         port: u16,
+        login_user: impl Into<String>,
         user: impl Into<String>,
-        run_as: impl Into<String>,
     ) -> Self {
         PasswordRequest {
             kind: PasswordKind::Sudo,
             host: host.into(),
             port,
-            user: user.into(),
-            run_as: Some(run_as.into()),
+            login_user: login_user.into(),
+            user: Some(user.into()),
             key_path: None,
         }
     }
@@ -72,35 +72,35 @@ impl PasswordRequest {
     pub fn key_passphrase(
         host: impl Into<String>,
         port: u16,
-        user: impl Into<String>,
+        login_user: impl Into<String>,
         key_path: PathBuf,
     ) -> Self {
         PasswordRequest {
             kind: PasswordKind::KeyPassphrase,
             host: host.into(),
             port,
-            user: user.into(),
-            run_as: None,
+            login_user: login_user.into(),
+            user: None,
             key_path: Some(key_path),
         }
     }
 
     /// Cache key: sudo passwords are the login user's password, so they are
-    /// shared with [`PasswordKind::Login`] for the same user and host.
+    /// shared with [`PasswordKind::Login`] for the same login user and host.
     fn cache_key(&self) -> CacheKey {
         match self.kind {
             PasswordKind::Login | PasswordKind::Sudo => CacheKey {
                 kind: PasswordKind::Login,
                 host: self.host.clone(),
                 port: self.port,
-                user: self.user.clone(),
+                login_user: self.login_user.clone(),
                 key_path: None,
             },
             PasswordKind::KeyPassphrase => CacheKey {
                 kind: self.kind,
                 host: String::new(),
                 port: 0,
-                user: String::new(),
+                login_user: String::new(),
                 key_path: self.key_path.clone(),
             },
         }
@@ -109,12 +109,12 @@ impl PasswordRequest {
     /// A human readable prompt.
     pub fn prompt_text(&self) -> String {
         match self.kind {
-            PasswordKind::Login => format!("{}@{}'s password: ", self.user, self.host),
+            PasswordKind::Login => format!("{}@{}'s password: ", self.login_user, self.host),
             PasswordKind::Sudo => format!(
-                "[sudo] password for {}@{} (run as {}): ",
-                self.user,
+                "[sudo] password for {}@{} (user {}): ",
+                self.login_user,
                 self.host,
-                self.run_as.as_deref().unwrap_or("root")
+                self.user.as_deref().unwrap_or("root")
             ),
             PasswordKind::KeyPassphrase => format!(
                 "Enter passphrase for key '{}': ",
@@ -138,7 +138,7 @@ struct CacheKey {
     kind: PasswordKind,
     host: String,
     port: u16,
-    user: String,
+    login_user: String,
     key_path: Option<PathBuf>,
 }
 

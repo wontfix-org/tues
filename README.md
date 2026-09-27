@@ -9,19 +9,21 @@ Key points:
 - **Sans-IO core.** The exec protocol (`ExecMachine`) is a pure state machine:
   bytes and channel events in, effects out. The tokio driver (`tues-async`)
   and the blocking facade (`tues-sync`) share it.
-- **Login user vs. run-as user.** A session logs in as one user and runs
-  commands as another via `sudo`. The sudo prompt is intercepted in both plain
+- **Login user vs. user.** A session logs in as the login user and runs
+  commands as the user, via `sudo` when they differ. The sudo prompt is intercepted in both plain
   and PTY mode; the prompt, the password, and any `Sorry, try again.` noise are
   removed from the conversation, so binary data on stdout stays intact.
 - **Pluggable, memoizing password manager.** Passwords for login, sudo and key
   passphrases are requested through the `PasswordManager` trait. The default
-  prompts once on the TTY and caches per host/user; swap in your own.
+  prompts once on the TTY and caches per host and login user; swap in your own.
 - **OpenSSH configuration.** `~/.ssh/config` (`Host`, `Match all`, `Include`,
   `ProxyJump`, `IdentityFile`, `User`, `Port`, `StrictHostKeyChecking`,
   `UserKnownHostsFile`, …) is honoured, and everything can be overridden from
   the API.
-- **`std::process`-shaped API.** `Command`, `Child`, `Output`, `ExitStatus`,
-  `Stdio` behave like their standard-library counterparts.
+- **Standard-library-shaped APIs.** In Rust, `Command`, `Child`, `Output`,
+  `ExitStatus`, `Stdio` behave like `std::process`. In Python, `Session.run`,
+  `Popen`, `CompletedProcess`, `PIPE`/`STDOUT`/`DEVNULL`, `check_output`, …
+  behave like `subprocess` (and `asyncio.subprocess`).
 - **Pure Rust SSH** via [`russh`](https://crates.io/crates/russh); no `libssh2`
   or OpenSSL to link.
 
@@ -34,7 +36,8 @@ Key points:
 | `crates/tues-sync` | Blocking API; a private tokio runtime drives `tues-async`. |
 | `crates/tues` | Facade crate: blocking API at the root, async API in `tues::aio`. |
 | `crates/tues-cli` | The `tues` binary. |
-| `crates/tues-python` | PyO3 extension module (`tues._tues`). |
+| `crates/tues-python` | PyO3 extension module (`tues._tues`): sessions, raw child handles, SFTP. |
+| `python/tues` | The Python package: the `subprocess`-shaped API on top of `tues._tues`. |
 | `crates/tues-testsupport` | Docker `sshd` fixture for the integration tests. |
 
 ## Command line
@@ -42,8 +45,8 @@ Key points:
 ```text
 tues [OPTIONS] <COMMAND> <SERVERS>...
 
-  -u, --user <USER>          SSH login user
-  -r, --run-as <RUN_AS>      Run the command as this user via sudo
+  -l, --login-user <USER>    Login user
+  -u, --user <USER>          User to run the command as, via sudo
   -j, --jobs <JOBS>          Maximum number of hosts worked on concurrently
   -p, --port <PORT>          SSH port
   -i, --identity <FILE>      Identity file; may be repeated
@@ -58,18 +61,18 @@ tues [OPTIONS] <COMMAND> <SERVERS>...
   -v, --verbose...           Verbose logging
 ```
 
-Servers can be `host`, `user@host`, `host:port`, `[2001:db8::1]:2222`, or an
+Servers can be `host`, `login-user@host`, `host:port`, `[2001:db8::1]:2222`, or an
 alias from `~/.ssh/config`.
 
 ```sh
 # Restart a service on three hosts, four at a time, as root.
-tues -u deploy -r root -j 4 'systemctl restart nginx' web01 web02 web03
+tues -l deploy -u root -j 4 'systemctl restart nginx' web01 web02 web03
 
 # One host: raw stdout/stderr, the remote exit status becomes ours.
 tues 'tar cz /var/log' backup01 > logs.tgz
 
 # Passwords from the environment instead of the terminal.
-TUES_PW=s3cret tues --password-env TUES_PW -r root 'apt-get update' db01 db02
+TUES_PW=s3cret tues --password-env TUES_PW -u root 'apt-get update' db01 db02
 ```
 
 With several hosts each output line is prefixed with `host: `, and the exit
@@ -99,7 +102,7 @@ fn main() -> tues::Result<()> {
     let opts = ConnectOptions::new("alice@web01")
         .identity_file("/home/alice/.ssh/id_ed25519")
         .host_key_policy(HostKeyPolicy::AcceptNew)
-        .run_as("root"); // default sudo user for this session
+        .user("root"); // commands run as root unless told otherwise
 
     let session = Session::connect(opts)?;
 
@@ -115,7 +118,7 @@ fn main() -> tues::Result<()> {
         .shell("echo $GREETING from $(pwd)")
         .env("GREETING", "hello")
         .current_dir("/tmp")
-        .run_as_login_user()
+        .as_login_user()
         .output()?;
     println!("{}", out.stdout_lossy());
 
@@ -123,7 +126,7 @@ fn main() -> tues::Result<()> {
     let mut child = session
         .command("cat")
         .arg("/var/lib/secret.bin")
-        .run_as("root")
+        .user("root")
         .stdout(Stdio::Piped)
         .spawn()?;
     let mut data = Vec::new();
@@ -163,7 +166,7 @@ use tues::{ConnectOptions, Stdio};
 
 #[tokio::main]
 async fn main() -> tues::Result<()> {
-    let session = Session::connect(ConnectOptions::new("alice@web01").run_as("root")).await?;
+    let session = Session::connect(ConnectOptions::new("alice@web01").user("root")).await?;
 
     // Fan out: commands on one session run concurrently on separate channels.
     let uptime = session.command("uptime");
@@ -201,7 +204,7 @@ async fn main() -> tues::Result<()> {
 ### Connection options
 
 Everything `ssh` reads from `~/.ssh/config` can be set on the builder; the
-precedence is destination string (`user@host:port`) > builder > ssh_config >
+precedence is destination string (`login-user@host:port`) > builder > ssh_config >
 defaults.
 
 ```rust
@@ -209,7 +212,7 @@ use std::time::Duration;
 use tues::{ConnectOptions, HostKeyPolicy, SshConfigSource};
 
 let opts = ConnectOptions::new("db01")
-    .user("deploy")
+    .login_user("deploy")
     .port(2222)
     .host_name("10.0.0.5")                      // like HostName
     .identity_file("~/.ssh/deploy_ed25519")
@@ -225,7 +228,7 @@ let opts = ConnectOptions::new("db01")
 
 // Inspect what will actually be used:
 let resolved = opts.resolve()?;
-println!("{}@{}:{}", resolved.user, resolved.host_name, resolved.port);
+println!("{}@{}:{}", resolved.login_user, resolved.host_name, resolved.port);
 # Ok::<(), tues::Error>(())
 ```
 
@@ -252,7 +255,7 @@ struct Vault;
 impl PasswordPrompter for Vault {
     fn prompt(&mut self, req: &PasswordRequest) -> tues::Result<SecretString> {
         let key = match req.kind {
-            PasswordKind::Login | PasswordKind::Sudo => format!("ssh/{}/{}", req.host, req.user),
+            PasswordKind::Login | PasswordKind::Sudo => format!("ssh/{}/{}", req.host, req.login_user),
             PasswordKind::KeyPassphrase => format!("keys/{}", req.key_path.as_ref().unwrap().display()),
         };
         let secret = lookup_in_vault(&key).map_err(|e| tues::Error::Password(e.to_string()))?;
@@ -278,7 +281,7 @@ over your own transport, feed `ExecMachine` events and act on its effects:
 ```rust
 use tues::core::{Bytes, Command, Effect, Event, ExecMachine, Stdio};
 
-let plan = Command::new("id").run_as("root").plan(Stdio::Piped, None);
+let plan = Command::new("id").user("root").plan(Stdio::Piped, None);
 let mut m = ExecMachine::new(&plan);
 
 // Exec `plan.command_line` on a freshly opened SSH channel, then loop: feed
@@ -305,25 +308,47 @@ pip install maturin
 maturin develop --release        # or: pip install .
 ```
 
+The Python API is shaped like the standard library: a `Session` is the
+`subprocess` module for one remote host, an `AsyncSession` is
+`asyncio.subprocess`. `run`, `Popen`, `CompletedProcess`, `CalledProcessError`,
+`TimeoutExpired`, `PIPE`, `STDOUT`, `DEVNULL`, `check_output`, `communicate`,
+`text=`, `shell=`, `timeout=`, … all work as you know them. `Popen.stdout` is
+a real `io.BufferedReader`/`TextIOWrapper`, `Process.stdout` a real
+`asyncio.StreamReader`. The exceptions subclass their `subprocess` namesakes.
+
 ### Blocking
 
 ```python
 import tues
 
-with tues.Session.connect("alice@web01", run_as="root", host_key_policy="accept-new") as s:
-    out = s.run("systemctl restart nginx", check=True)   # str → remote shell
-    out = s.run(["id", "-un"])                            # list → argv
-    print(out.returncode, out.stdout, out.stderr)
+with tues.Session("alice@web01", user="root", host_key_policy="accept-new") as s:
+    # subprocess.run, on the remote host (as root because of the session default).
+    s.run(["systemctl", "restart", "nginx"], check=True)
 
-    out = s.run("cat", input=b"\x00\x01binary", run_as="root")
+    out = s.run("df -h | tail -n +2", shell=True, capture_output=True, text=True)
+    print(out.returncode, out.stdout)
+
+    # Bytes stay bytes, even through sudo.
+    out = s.run(["cat"], input=b"\x00\x01binary", stdout=tues.PIPE)
     assert out.stdout == b"\x00\x01binary"
 
-    child = s.spawn("tail -f /var/log/syslog", stderr="null")
-    for line in child.stdout:
-        print(line.decode(), end="")
-        break
-    child.kill()
-    child.wait()
+    # Errors and output are the familiar ones.
+    try:
+        s.check_output(["false"])
+    except tues.CalledProcessError as e:        # also a subprocess.CalledProcessError
+        print(e.returncode, e.cmd)
+
+    # Popen: stream, signal, wait.
+    with s.Popen(["tail", "-f", "/var/log/syslog"], stdout=tues.PIPE, stderr=tues.DEVNULL, text=True) as p:
+        for line in p.stdout:
+            print(line, end="")
+            break
+        p.terminate()                           # SIGTERM; p.kill() for SIGKILL
+    print(p.returncode)                         # -15
+
+    # Local files as stdio; the login user instead of the session default.
+    with open("logs.tgz", "wb") as f:
+        s.run(["tar", "cz", "/var/log"], stdout=f, user=tues.LOGIN_USER, check=True)
 
     with s.sftp() as sftp:
         sftp.write("/tmp/hello.txt", b"hello")
@@ -333,20 +358,36 @@ with tues.Session.connect("alice@web01", run_as="root", host_key_policy="accept-
         print([e.name for e in sftp.listdir("/tmp")])
 ```
 
+Also available: `call`, `check_call`, `getoutput`, `getstatusoutput`,
+`Popen.communicate(input, timeout)`, `Popen.wait(timeout)`, `Popen.poll()`,
+`Popen.send_signal("USR1")`, `bufsize=`, `encoding=`/`errors=`, `env=`, `cwd=`.
+
 ### asyncio
 
 ```python
 import asyncio, tues
 
 async def main():
-    async with await tues.AsyncSession.connect("alice@web01", run_as="root") as s:
-        results = await asyncio.gather(*(s.run(f"echo {i}") for i in range(10)))
-        print([r.stdout for r in results])
+    async with await tues.AsyncSession.connect("alice@web01", user="root") as s:
+        # asyncio.subprocess, on the remote host.
+        proc = await s.create_subprocess_exec("wc", "-c", stdin=tues.PIPE, stdout=tues.PIPE)
+        proc.stdin.write(b"12345")
+        await proc.stdin.drain()
+        proc.stdin.close()
+        stdout, _ = await proc.communicate()
+        assert stdout.strip() == b"5" and proc.returncode == 0
 
-        child = await s.spawn("cat")
-        await child.stdin.write(b"ping")
-        await child.stdin.close()
-        stdout, stderr = await child.communicate()
+        proc = await s.create_subprocess_shell("journalctl -f -n 0", stdout=tues.PIPE)
+        async for line in proc.stdout:
+            print(line.decode(), end="")
+            break
+        proc.kill()
+        await proc.wait()
+
+        # run() is the asyncio twin of subprocess.run; commands on one session
+        # run concurrently on separate channels.
+        results = await asyncio.gather(*(s.run(["echo", str(i)], capture_output=True, text=True) for i in range(10)))
+        print([r.stdout.strip() for r in results])
 
         async with await s.sftp() as sftp:
             await sftp.write("/tmp/x", b"data")
@@ -355,32 +396,54 @@ async def main():
 asyncio.run(main())
 ```
 
+### Differences from `subprocess`
+
+Consequences of the process running on another machine:
+
+- `stdin=None` means *no input* (EOF), not the local stdin; pass
+  `stdin=sys.stdin` (blocking API) to forward it. `stdout`/`stderr=None`
+  do go to the local stdout/stderr.
+- `env` adds to / overrides the remote environment instead of replacing it;
+  a `None` value unsets a variable.
+- `pid` is always `None`. `returncode` is `-N` when the process died of
+  signal `N`, as on POSIX.
+- `terminate()`/`send_signal()` need a server that implements SSH channel
+  signals (OpenSSH ≥ 7.9); `kill()` also closes the channel.
+- Extra keyword arguments: `user` and `pty`. `user` is a name (via `sudo -u`)
+  or `tues.LOGIN_USER` (the login user, never via sudo, even when the session
+  has a default `user`); leaving it out inherits the session default. With a
+  PTY, stderr is merged into stdout by the terminal.
+- The asyncio API is bytes-only like `asyncio.subprocess`; `AsyncSession.run`
+  adds `text=`/`encoding=`.
+
 ### Passwords
 
 ```python
 import getpass, tues
 
 # Prompt once per host/user; Rust memoizes and re-prompts after a wrong password.
-s = tues.Session.connect("alice@web01", password_manager=lambda req: getpass.getpass(req.prompt))
+s = tues.Session("alice@web01", password_manager=lambda req: getpass.getpass(req.prompt))
 
 # Fixed password for login and sudo.
-s = tues.Session.connect("alice@web01", password="s3cret")
+s = tues.Session("alice@web01", password="s3cret")
 
 # Own the caching: an object with get() and invalidate() is called every time.
 class Keyring:
     def get(self, req: tues.PasswordRequest) -> str: ...
     def invalidate(self, req: tues.PasswordRequest) -> None: ...
 
-s = tues.Session.connect("alice@web01", password_manager=Keyring())
+s = tues.Session("alice@web01", password_manager=Keyring())
 ```
 
 Errors are raised as `tues.TuesError` subclasses: `ConnectError`, `AuthError`,
-`HostKeyError`, `SudoError`, `SftpError`. `run(..., check=True)` raises
-`TuesError` on a non-zero exit status.
+`HostKeyError`, `SudoError`, `SftpError`, and `CalledProcessError` /
+`TimeoutExpired` (which are also `subprocess.CalledProcessError` /
+`subprocess.TimeoutExpired`). A sudo failure surfaces from `run()` /
+`wait()` / `communicate()` as `SudoError`.
 
 ## How sudo is made invisible
 
-For a command with a run-as user the driver executes
+For a command running as a user other than the login user the driver executes
 
 ```text
 sudo -S -k -p '[tues-sudo-<nonce>]' -u <user> -- /bin/sh -c 'printf %s "[tues-ok-<nonce>]"; <command>'

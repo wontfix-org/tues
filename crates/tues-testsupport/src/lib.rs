@@ -45,7 +45,7 @@ impl SshdFixture {
     /// checking off, and a static password manager with the login password.
     pub fn connect_options(&self) -> ConnectOptions {
         ConnectOptions::new(&self.host)
-            .user(USER)
+            .login_user(USER)
             .port(self.port)
             .identity_file(&self.key_path)
             .identities_only(true)
@@ -66,7 +66,7 @@ impl SshdFixture {
     /// Options that reach the target only via the jump container.
     pub fn via_jump_options(&self) -> ConnectOptions {
         ConnectOptions::new(&self.target_name)
-            .user(USER)
+            .login_user(USER)
             .port(22)
             .identity_file(&self.key_path)
             .identities_only(true)

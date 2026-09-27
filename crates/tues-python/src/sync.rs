@@ -1,4 +1,9 @@
 //! Blocking Python API.
+//!
+//! This is the low-level layer under `tues.Session` / `tues.Popen`: the
+//! Python package wraps `Child` and its raw pipes in `io` objects and adds
+//! the `subprocess`-shaped surface (text mode, `communicate`, timeouts,
+//! `CompletedProcess`, ...).
 
 use std::io::{Read, Seek, Write};
 use std::sync::Mutex;
@@ -8,8 +13,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::common::{
-    self, ExitStatus, Metadata, Output, check_output, command, connect_options, io_to_pyerr,
-    run_check, run_input, to_pyerr,
+    self, Metadata, command, connect_options, io_to_pyerr, returncode, signal_name,
+    timeout_duration, to_pyerr,
 };
 
 fn lock<T>(m: &Mutex<T>) -> PyResult<std::sync::MutexGuard<'_, T>> {
@@ -18,17 +23,17 @@ fn lock<T>(m: &Mutex<T>) -> PyResult<std::sync::MutexGuard<'_, T>> {
 }
 
 /// A blocking SSH session.
-#[pyclass(name = "Session", module = "tues")]
+#[pyclass(name = "Session", module = "tues._tues")]
 pub struct Session {
     inner: tues_sync::Session,
 }
 
 #[pymethods]
 impl Session {
-    /// Connect to `destination` (`host`, `user@host`, `host:port`, or an
+    /// Connect to `destination` (`host`, `login-user@host`, `host:port`, or an
     /// ssh_config alias).
     ///
-    /// Keyword arguments: user, port, run_as, host_name, identity_files,
+    /// Keyword arguments: login_user, port, user, host_name, identity_files,
     /// identities_only, proxy_jump, connect_timeout, server_alive_interval,
     /// compression, use_agent, pubkey_authentication,
     /// password_authentication, host_key_policy ("strict" | "accept-new" |
@@ -54,8 +59,8 @@ impl Session {
     }
 
     #[getter]
-    fn user(&self) -> String {
-        self.inner.user().to_string()
+    fn login_user(&self) -> String {
+        self.inner.login_user().to_string()
     }
 
     #[getter]
@@ -68,10 +73,10 @@ impl Session {
         self.inner.options().port
     }
 
-    /// Default sudo user for commands.
+    /// Default user commands run as, or None for the login user.
     #[getter]
-    fn run_as(&self) -> Option<String> {
-        self.inner.default_run_as().map(str::to_string)
+    fn user(&self) -> Option<String> {
+        self.inner.user().map(str::to_string)
     }
 
     #[getter]
@@ -79,43 +84,21 @@ impl Session {
         self.inner.is_closed()
     }
 
-    /// Run `cmd` (a shell string or an argv list) to completion.
+    /// Start a remote process.
     ///
-    /// Keyword arguments: run_as, run_as_login_user, pty, env (dict), cwd,
-    /// input (bytes for stdin), check (raise on non-zero exit).
-    #[pyo3(signature = (cmd, **kwargs))]
-    fn run(
-        &self,
-        py: Python<'_>,
-        cmd: &Bound<'_, PyAny>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Output> {
-        let c = command(cmd, kwargs)?;
-        let input = run_input(kwargs)?;
-        let check = run_check(kwargs)?;
-        let session = self.inner.clone();
-        let out = py
-            .detach(move || {
-                let a = session.async_session().clone();
-                session.block_on(common::run_async(&a, c, input))
-            })
-            .map_err(to_pyerr)?;
-        check_output(check, &out)?;
-        Ok(Output::from_core(py, out))
-    }
-
-    /// Spawn `cmd` and return a `Child` with piped stdio by default.
-    ///
-    /// Keyword arguments: run_as, run_as_login_user, pty, env, cwd, and
-    /// stdin/stdout/stderr ("pipe" | "null" | "inherit").
-    #[pyo3(signature = (cmd, **kwargs))]
+    /// `args` is an argv list; with `shell=True`, `args[0]` is a shell
+    /// script and the rest are its positional parameters. Keyword arguments:
+    /// user, as_login_user, pty, env (dict; None removes), cwd, and
+    /// stdin/stdout/stderr (None = inherit, PIPE, DEVNULL).
+    #[pyo3(signature = (args, shell = false, **kwargs))]
     fn spawn(
         &self,
         py: Python<'_>,
-        cmd: &Bound<'_, PyAny>,
+        args: Vec<String>,
+        shell: bool,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Child> {
-        let c = command(cmd, kwargs)?;
+        let c = command(args, shell, kwargs)?;
         let session = self.inner.clone();
         let mut child = py.detach(move || session.spawn(&c)).map_err(to_pyerr)?;
         let stdin = match child.stdin.take() {
@@ -131,7 +114,7 @@ impl Session {
             Some(s) => Some(Py::new(
                 py,
                 ChildStdout {
-                    inner: Mutex::new(Reader::Stdout(s)),
+                    inner: Mutex::new(Some(Reader::Stdout(s))),
                 },
             )?),
             None => None,
@@ -140,12 +123,13 @@ impl Session {
             Some(s) => Some(Py::new(
                 py,
                 ChildStdout {
-                    inner: Mutex::new(Reader::Stderr(s)),
+                    inner: Mutex::new(Some(Reader::Stderr(s))),
                 },
             )?),
             None => None,
         };
         Ok(Child {
+            signaller: child.signaller(),
             inner: Mutex::new(child),
             stdin,
             stdout,
@@ -165,36 +149,21 @@ impl Session {
         py.detach(move || session.close()).map_err(to_pyerr)
     }
 
-    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    #[pyo3(signature = (_exc_type, _exc, _tb))]
-    fn __exit__(
-        &self,
-        py: Python<'_>,
-        _exc_type: Option<&Bound<'_, PyAny>>,
-        _exc: Option<&Bound<'_, PyAny>>,
-        _tb: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<bool> {
-        self.close(py)?;
-        Ok(false)
-    }
-
     fn __repr__(&self) -> String {
         format!(
             "Session({}@{}:{})",
-            self.inner.user(),
+            self.inner.login_user(),
             self.inner.host(),
             self.inner.options().port
         )
     }
 }
 
-/// A running remote process.
-#[pyclass(name = "Child", module = "tues")]
+/// A running remote process (raw handle; see `tues.Popen`).
+#[pyclass(name = "Child", module = "tues._tues")]
 pub struct Child {
     inner: Mutex<tues_sync::Child>,
+    signaller: tues_sync::ChildSignaller,
     stdin: Option<Py<ChildStdin>>,
     stdout: Option<Py<ChildStdout>>,
     stderr: Option<Py<ChildStdout>>,
@@ -220,73 +189,50 @@ impl Child {
         self.stderr.as_ref().map(|s| s.clone_ref(py))
     }
 
-    /// Wait for the process to exit.
-    fn wait(&self, py: Python<'_>) -> PyResult<ExitStatus> {
-        let status = py
-            .detach(|| lock(&self.inner)?.wait().map_err(to_pyerr))
-            .map(ExitStatus)?;
-        Ok(status)
+    /// Wait for the process to exit and return its return code (negative
+    /// signal number if it was killed). With a `timeout` (seconds), returns
+    /// None if the process is still running when it expires.
+    #[pyo3(signature = (timeout = None))]
+    fn wait(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<Option<i32>> {
+        py.detach(|| {
+            let mut g = lock(&self.inner)?;
+            let status = match timeout_duration(timeout) {
+                None => Some(g.wait().map_err(to_pyerr)?),
+                Some(d) => g.wait_timeout(d).map_err(to_pyerr)?,
+            };
+            Ok(status.as_ref().map(returncode))
+        })
     }
 
-    /// Return the exit status if the process has finished, else None.
-    fn poll(&self) -> PyResult<Option<ExitStatus>> {
-        Ok(lock(&self.inner)?
-            .try_wait()
-            .map_err(to_pyerr)?
-            .map(ExitStatus))
+    /// Return the return code if the process has finished, else None.
+    ///
+    /// Never blocks: if another thread is currently in `wait()`, None is
+    /// returned.
+    fn poll(&self) -> PyResult<Option<i32>> {
+        match self.inner.try_lock() {
+            Ok(mut g) => Ok(g.try_wait().map_err(to_pyerr)?.as_ref().map(returncode)),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                Err(PyValueError::new_err("internal lock poisoned"))
+            }
+        }
+    }
+
+    /// The return code if known, else None (alias of `poll()`).
+    #[getter]
+    fn returncode(&self) -> PyResult<Option<i32>> {
+        self.poll()
+    }
+
+    /// Send a signal by name ("TERM", "SIGTERM", ...). The channel stays
+    /// open so the process can report its own exit status.
+    fn send_signal(&self, name: &str) -> PyResult<()> {
+        self.signaller.signal(signal_name(name)?).map_err(to_pyerr)
     }
 
     /// Send SIGKILL and close the channel.
     fn kill(&self) -> PyResult<()> {
-        lock(&self.inner)?.kill().map_err(to_pyerr)
-    }
-
-    /// Write `input` (if any) to stdin, close it, read stdout and stderr to
-    /// EOF and wait. Returns `(stdout, stderr)`.
-    #[pyo3(signature = (input = None))]
-    fn communicate(
-        &self,
-        py: Python<'_>,
-        input: Option<Vec<u8>>,
-    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-        let stdin = self.stdin.as_ref().map(|s| s.clone_ref(py));
-        let stdout = self.stdout.as_ref().map(|s| s.clone_ref(py));
-        let stderr = self.stderr.as_ref().map(|s| s.clone_ref(py));
-        let (out, err) = py.detach(move || -> PyResult<(Vec<u8>, Vec<u8>)> {
-            // Writer thread so a large input cannot deadlock against unread output.
-            let writer = std::thread::spawn(move || -> std::io::Result<()> {
-                if let Some(s) = stdin {
-                    let guard = Python::attach(|py| s.bind(py).borrow().take_inner());
-                    if let Some(mut w) = guard {
-                        if let Some(data) = input {
-                            w.write_all(&data)?;
-                        }
-                        w.close()?;
-                    }
-                }
-                Ok(())
-            });
-            let err_reader = std::thread::spawn(move || -> PyResult<Vec<u8>> {
-                match stderr {
-                    Some(s) => Python::attach(|py| s.bind(py).borrow().read_all_detached(py)),
-                    None => Ok(Vec::new()),
-                }
-            });
-            let out = match stdout {
-                Some(s) => Python::attach(|py| s.bind(py).borrow().read_all_detached(py))?,
-                None => Vec::new(),
-            };
-            let err = err_reader
-                .join()
-                .map_err(|_| PyValueError::new_err("stderr reader panicked"))??;
-            writer
-                .join()
-                .map_err(|_| PyValueError::new_err("stdin writer panicked"))?
-                .map_err(io_to_pyerr)?;
-            Ok((out, err))
-        })?;
-        let _ = self.wait(py)?;
-        Ok((PyBytes::new(py, &out).unbind(), PyBytes::new(py, &err).unbind()))
+        self.signaller.kill().map_err(to_pyerr)
     }
 
     fn __repr__(&self) -> String {
@@ -294,63 +240,40 @@ impl Child {
     }
 }
 
-/// Writable stdin of a `Child`.
-#[pyclass(name = "ChildStdin", module = "tues")]
+/// Raw writable stdin of a `Child`.
+#[pyclass(name = "ChildStdin", module = "tues._tues")]
 pub struct ChildStdin {
     inner: Mutex<Option<tues_sync::ChildStdin>>,
 }
 
-impl ChildStdin {
-    fn take_inner(&self) -> Option<tues_sync::ChildStdin> {
-        self.inner.lock().ok().and_then(|mut g| g.take())
-    }
-}
-
 #[pymethods]
 impl ChildStdin {
-    /// Write bytes; returns the number written.
+    /// Write all of `data`; returns the number of bytes written.
     fn write(&self, py: Python<'_>, data: &[u8]) -> PyResult<usize> {
         py.detach(|| {
             let mut g = lock(&self.inner)?;
             let Some(w) = g.as_mut() else {
-                return Err(PyValueError::new_err("stdin is closed"));
+                return Err(PyValueError::new_err("write to closed stdin"));
             };
             w.write_all(data).map_err(io_to_pyerr)?;
             Ok(data.len())
         })
     }
 
-    fn flush(&self) -> PyResult<()> {
-        Ok(())
-    }
-
-    /// Send EOF.
+    /// Send EOF. Idempotent.
     fn close(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| match self.take_inner() {
-            Some(w) => w.close().map_err(io_to_pyerr),
-            None => Ok(()),
+        py.detach(|| {
+            let w = lock(&self.inner)?.take();
+            match w {
+                Some(w) => w.close().map_err(io_to_pyerr),
+                None => Ok(()),
+            }
         })
     }
 
     #[getter]
     fn closed(&self) -> PyResult<bool> {
         Ok(lock(&self.inner)?.is_none())
-    }
-
-    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    #[pyo3(signature = (_exc_type, _exc, _tb))]
-    fn __exit__(
-        &self,
-        py: Python<'_>,
-        _exc_type: Option<&Bound<'_, PyAny>>,
-        _exc: Option<&Bound<'_, PyAny>>,
-        _tb: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<bool> {
-        self.close(py)?;
-        Ok(false)
     }
 }
 
@@ -368,96 +291,48 @@ impl Read for Reader {
     }
 }
 
-/// Readable stdout/stderr of a `Child`.
-#[pyclass(name = "ChildStdout", module = "tues")]
+/// Raw readable stdout/stderr of a `Child`.
+#[pyclass(name = "ChildStdout", module = "tues._tues")]
 pub struct ChildStdout {
-    inner: Mutex<Reader>,
-}
-
-impl ChildStdout {
-    fn read_all_detached(&self, py: Python<'_>) -> PyResult<Vec<u8>> {
-        py.detach(|| {
-            let mut v = Vec::new();
-            lock(&self.inner)?.read_to_end(&mut v).map_err(io_to_pyerr)?;
-            Ok(v)
-        })
-    }
-
-    fn read_n(&self, py: Python<'_>, n: usize) -> PyResult<Vec<u8>> {
-        py.detach(|| {
-            let mut buf = vec![0u8; n];
-            let got = lock(&self.inner)?.read(&mut buf).map_err(io_to_pyerr)?;
-            buf.truncate(got);
-            Ok(buf)
-        })
-    }
+    inner: Mutex<Option<Reader>>,
 }
 
 #[pymethods]
 impl ChildStdout {
-    /// Read up to `n` bytes (at least one unless EOF), or everything when
-    /// `n` is negative.
+    /// Read up to `n` bytes, blocking until at least one is available
+    /// (empty at EOF). A negative `n` reads everything up to EOF.
     #[pyo3(signature = (n = -1))]
     fn read(&self, py: Python<'_>, n: isize) -> PyResult<Py<PyBytes>> {
-        let v = if n < 0 {
-            self.read_all_detached(py)?
-        } else {
-            self.read_n(py, n as usize)?
-        };
-        Ok(PyBytes::new(py, &v).unbind())
-    }
-
-    /// Read exactly `n` bytes (fewer only at EOF).
-    fn read_exact(&self, py: Python<'_>, n: usize) -> PyResult<Py<PyBytes>> {
         let v = py.detach(|| {
-            let mut out = Vec::with_capacity(n);
             let mut g = lock(&self.inner)?;
-            let mut buf = vec![0u8; 16 * 1024];
-            while out.len() < n {
-                let want = (n - out.len()).min(buf.len());
-                let got = g.read(&mut buf[..want]).map_err(io_to_pyerr)?;
-                if got == 0 {
-                    break;
-                }
-                out.extend_from_slice(&buf[..got]);
-            }
-            Ok::<_, PyErr>(out)
+            let Some(r) = g.as_mut() else {
+                return Err(PyValueError::new_err("read from closed pipe"));
+            };
+            let mut buf = if n < 0 {
+                let mut v = Vec::new();
+                r.read_to_end(&mut v).map_err(io_to_pyerr)?;
+                v
+            } else {
+                let mut v = vec![0u8; n as usize];
+                let got = r.read(&mut v).map_err(io_to_pyerr)?;
+                v.truncate(got);
+                v
+            };
+            buf.shrink_to_fit();
+            Ok::<_, PyErr>(buf)
         })?;
         Ok(PyBytes::new(py, &v).unbind())
     }
 
-    /// Read one line including the newline (empty at EOF).
-    fn readline(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
-        let v = py.detach(|| {
-            let mut out = Vec::new();
-            let mut g = lock(&self.inner)?;
-            let mut b = [0u8; 1];
-            loop {
-                let got = g.read(&mut b).map_err(io_to_pyerr)?;
-                if got == 0 {
-                    break;
-                }
-                out.push(b[0]);
-                if b[0] == b'\n' {
-                    break;
-                }
-            }
-            Ok::<_, PyErr>(out)
-        })?;
-        Ok(PyBytes::new(py, &v).unbind())
+    /// Drop the pipe; further output from the process is discarded.
+    fn close(&self) -> PyResult<()> {
+        lock(&self.inner)?.take();
+        Ok(())
     }
 
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyBytes>>> {
-        let line = self.readline(py)?;
-        if line.bind(py).is_empty()? {
-            Ok(None)
-        } else {
-            Ok(Some(line))
-        }
+    #[getter]
+    fn closed(&self) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.is_none())
     }
 }
 
@@ -492,7 +367,9 @@ impl Sftp {
     fn open(&self, py: Python<'_>, path: String, mode: &str) -> PyResult<File> {
         let opts = common::open_options(mode)?;
         let s = self.inner.clone();
-        let f = py.detach(move || s.open_with(path, opts)).map_err(to_pyerr)?;
+        let f = py
+            .detach(move || s.open_with(path, opts))
+            .map_err(to_pyerr)?;
         Ok(File {
             inner: Mutex::new(Some(f)),
         })

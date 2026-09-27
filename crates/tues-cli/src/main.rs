@@ -45,17 +45,17 @@ struct Cli {
     /// The command line to run (interpreted by the remote shell).
     command: String,
 
-    /// Servers: `host`, `user@host`, `host:port`, or an ssh_config alias.
+    /// Servers: `host`, `login-user@host`, `host:port`, or an ssh_config alias.
     #[arg(required = true)]
     servers: Vec<String>,
 
-    /// SSH login user (default: from ssh_config or the local user).
+    /// Login user (default: from ssh_config or the local user).
+    #[arg(short = 'l', long = "login-user")]
+    login_user: Option<String>,
+
+    /// User to run the command as, via sudo.
     #[arg(short = 'u', long)]
     user: Option<String>,
-
-    /// Run the command as this user via sudo.
-    #[arg(short = 'r', long = "run-as")]
-    run_as: Option<String>,
 
     /// Maximum number of hosts worked on concurrently (default: all).
     #[arg(short = 'j', long)]
@@ -108,7 +108,7 @@ struct Cli {
     verbose: u8,
 }
 
-/// Prompts once per (kind, user) and reuses the answer across hosts, since a
+/// Prompts once per (kind, login user) and reuses the answer across hosts, since a
 /// fleet usually shares credentials. A rejection on any host clears it.
 struct FleetPasswordManager<P: PasswordPrompter> {
     prompter: P,
@@ -136,7 +136,7 @@ fn fleet_key(req: &PasswordRequest) -> (PasswordKind, String, Option<PathBuf>) {
         PasswordKind::Sudo => PasswordKind::Login,
         k => k,
     };
-    (kind, req.user.clone(), req.key_path.clone())
+    (kind, req.login_user.clone(), req.key_path.clone())
 }
 
 /// Prompter that names the host on the first prompt only.
@@ -237,8 +237,8 @@ async fn main() -> anyhow::Result<()> {
 
 fn connect_options(cli: &Cli, server: &str, pm: tues_core::SharedPasswordManager) -> ConnectOptions {
     let mut o = ConnectOptions::new(server).password_manager(pm);
-    if let Some(u) = &cli.user {
-        o = o.user(u.clone());
+    if let Some(u) = &cli.login_user {
+        o = o.login_user(u.clone());
     }
     if let Some(p) = cli.port {
         o = o.port(p);
@@ -260,8 +260,8 @@ fn connect_options(cli: &Cli, server: &str, pm: tues_core::SharedPasswordManager
     if let Some(t) = cli.connect_timeout {
         o = o.connect_timeout(Duration::from_secs(t));
     }
-    if let Some(r) = &cli.run_as {
-        o = o.run_as(r.clone());
+    if let Some(u) = &cli.user {
+        o = o.user(u.clone());
     }
     o
 }

@@ -104,7 +104,7 @@ async fn large_binary_roundtrip() {
 #[tokio::test]
 async fn sudo_with_password_removes_conversation() {
     let s = connect().await;
-    let out = s.command("id").arg("-un").run_as("root").output().await.unwrap();
+    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(out.stderr_lossy(), "", "stderr must not contain the prompt");
@@ -118,7 +118,7 @@ async fn sudo_binary_stdout_containing_nonces_is_intact() {
     let script = format!(
         "printf '[tues-sudo-'; printf '[tues-ok-'; printf '%s' '{PASSWORD}'; printf 'Sorry, try again.\\n'; head -c 300000 /dev/urandom; for i in $(seq 0 255); do printf \"\\\\$(printf %03o $i)\"; done"
     );
-    let out = s.shell(&script).run_as("root").output().await.unwrap();
+    let out = s.shell(&script).user("root").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.starts_with(b"[tues-sudo-[tues-ok-tuespassSorry, try again.\n"));
     assert_eq!(out.stdout.len(), "[tues-sudo-[tues-ok-tuespassSorry, try again.\n".len() + 300000 + 256);
@@ -131,7 +131,7 @@ async fn sudo_binary_stdout_containing_nonces_is_intact() {
 #[tokio::test]
 async fn sudo_stdin_is_delivered_after_password() {
     let s = connect().await;
-    let mut child = s.command("cat").run_as("root").spawn().await.unwrap();
+    let mut child = s.command("cat").user("root").spawn().await.unwrap();
     let mut stdin = child.stdin.take().unwrap();
     // Written before sudo has asked for anything: must not be eaten as the password.
     stdin.write_all(b"payload line\n").await.unwrap();
@@ -162,7 +162,7 @@ async fn sudo_wrong_password_is_invalidated_and_retried() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(pm);
     let s = Session::connect(o).await.unwrap();
-    let out = s.command("id").arg("-un").run_as("root").output().await.unwrap();
+    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(out.stderr_lossy(), "");
@@ -170,10 +170,10 @@ async fn sudo_wrong_password_is_invalidated_and_retried() {
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 2, "one wrong, one right");
         assert_eq!(calls[0].kind, tues_core::PasswordKind::Sudo);
-        assert_eq!(calls[0].run_as.as_deref(), Some("root"));
+        assert_eq!(calls[0].user.as_deref(), Some("root"));
     }
     // Second command must use the memoized password (no new prompt).
-    let out = s.command("id").arg("-un").run_as("root").output().await.unwrap();
+    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(calls.lock().unwrap().len(), 2);
 }
@@ -183,7 +183,7 @@ async fn sudo_always_wrong_password_reports_auth_failed() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("definitely-wrong")));
     let s = Session::connect(o).await.unwrap();
-    let err = s.command("id").run_as("root").output().await.expect_err("must fail");
+    let err = s.command("id").user("root").output().await.expect_err("must fail");
     assert!(
         matches!(err, Error::Sudo(SudoError::AuthFailed { attempts: 3 })),
         "{err}"
@@ -203,7 +203,7 @@ async fn sudo_without_password_manager_fails_cleanly() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
-    let err = s.command("id").run_as("root").output().await.expect_err("must fail");
+    let err = s.command("id").user("root").output().await.expect_err("must fail");
     assert!(
         matches!(err, Error::Sudo(SudoError::PasswordRequired { .. })),
         "{err}"
@@ -215,7 +215,7 @@ async fn sudo_nopasswd_target_needs_no_prompt() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
-    let out = s.command("id").arg("-un").run_as(NOPASSWD_USER).output().await.unwrap();
+    let out = s.command("id").arg("-un").user(NOPASSWD_USER).output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy().trim(), NOPASSWD_USER);
 }
@@ -225,7 +225,7 @@ async fn sudo_with_pty() {
     let s = connect().await;
     let out = s
         .shell("id -un; tty >/dev/null && echo has-tty")
-        .run_as("root")
+        .user("root")
         .pty(true)
         .output()
         .await
@@ -243,13 +243,13 @@ async fn pty_without_sudo() {
 }
 
 #[tokio::test]
-async fn session_default_run_as_and_override() {
+async fn session_default_user_and_override() {
     let mut o = sshd().connect_options();
-    o.run_as = Some("root".into());
+    o.user = Some("root".into());
     let s = Session::connect(o).await.unwrap();
     let out = s.command("id").arg("-un").output().await.unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
-    let out = s.command("id").arg("-un").run_as_login_user().output().await.unwrap();
+    let out = s.command("id").arg("-un").as_login_user().output().await.unwrap();
     assert_eq!(out.stdout_lossy(), format!("{USER}\n"));
 }
 
@@ -265,6 +265,57 @@ async fn kill_terminates_remote_process() {
         .expect("wait after kill")
         .unwrap();
     assert!(!status.success());
+}
+
+#[tokio::test]
+async fn signal_is_delivered_and_status_reports_it() {
+    let s = connect().await;
+    let mut child = s.command("sleep").arg("30").spawn().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Signalling through a separate handle while another task waits.
+    let signaller = child.signaller();
+    let waiter = tokio::spawn(async move { child.wait().await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    signaller.signal("TERM").unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), waiter)
+        .await
+        .expect("wait after TERM")
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.signal(), Some("TERM"), "{status:?}");
+    assert_eq!(status.code(), None);
+}
+
+#[tokio::test]
+async fn wait_is_cancel_safe() {
+    let s = connect().await;
+    let mut child = s.shell("sleep 1; exit 3").spawn().await.unwrap();
+    let timed_out = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
+    assert!(timed_out.is_err());
+    // The child must still be waitable after the timed-out wait was dropped.
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .expect("second wait")
+        .unwrap();
+    assert_eq!(status.code(), Some(3));
+    // And repeated calls keep returning the outcome.
+    assert_eq!(child.wait().await.unwrap().code(), Some(3));
+    assert_eq!(child.try_wait().unwrap().unwrap().code(), Some(3));
+}
+
+#[tokio::test]
+async fn failed_child_keeps_reporting_its_error() {
+    let mut o = sshd().connect_options();
+    o.password_manager = Some(shared(StaticPasswordManager::new("definitely-wrong")));
+    let s = Session::connect(o).await.unwrap();
+    let mut child = s.command("id").user("root").spawn().await.unwrap();
+    let err = child.wait().await.expect_err("sudo must fail");
+    assert!(matches!(err, Error::Sudo(_)), "{err}");
+    // Not `Disconnected`: the outcome is remembered.
+    let err = child.try_wait().expect_err("still the sudo error");
+    assert!(matches!(err, Error::Sudo(_)), "{err}");
+    let err = child.wait().await.expect_err("still the sudo error");
+    assert!(matches!(err, Error::Sudo(_)), "{err}");
 }
 
 #[tokio::test]
@@ -334,7 +385,7 @@ async fn ssh_config_host_entry_is_used() {
         .ssh_config(SshConfigSource::Parsed(cfg))
         .password_manager(shared(NoPassword));
     let s = Session::connect(opts).await.expect("connect via config");
-    assert_eq!(s.user(), USER);
+    assert_eq!(s.login_user(), USER);
     let out = s.command("true").output().await.unwrap();
     assert!(out.status.success());
 }
@@ -371,7 +422,7 @@ async fn proxy_jump_through_second_container() {
     let out = s.command("hostname").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     // Sudo still works through the jump.
-    let out = s.command("id").arg("-un").run_as("root").output().await.unwrap();
+    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
 }
 
@@ -382,7 +433,7 @@ async fn concurrent_commands_on_one_session() {
     for i in 0..8 {
         let s = s.clone();
         handles.push(tokio::spawn(async move {
-            s.shell(format!("echo {i}")).run_as("root").output().await.unwrap()
+            s.shell(format!("echo {i}")).user("root").output().await.unwrap()
         }));
     }
     for (i, h) in handles.into_iter().enumerate() {

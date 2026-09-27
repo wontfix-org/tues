@@ -57,16 +57,16 @@ impl Session {
         self.inner.options()
     }
 
-    pub fn user(&self) -> &str {
-        self.inner.user()
+    pub fn login_user(&self) -> &str {
+        self.inner.login_user()
     }
 
     pub fn host(&self) -> &str {
         self.inner.host()
     }
 
-    pub fn default_run_as(&self) -> Option<&str> {
-        self.inner.default_run_as()
+    pub fn user(&self) -> Option<&str> {
+        self.inner.user()
     }
 
     pub fn command(&self, program: impl Into<String>) -> Command {

@@ -15,7 +15,7 @@
 //!
 //! # fn main() -> tues::Result<()> {
 //! let session = Session::connect(ConnectOptions::new("alice@web01"))?;
-//! let out = session.command("systemctl").args(["restart", "nginx"]).run_as("root").output()?;
+//! let out = session.command("systemctl").args(["restart", "nginx"]).user("root").output()?;
 //! assert!(out.status.success());
 //! # Ok(()) }
 //! ```
@@ -23,16 +23,21 @@
 pub use tues_core as core;
 
 pub use tues_core::{
-    Command as CommandSpec, ConnectOptions, DirEntry, Error, ExitStatus, ExposeSecret, FileType,
+    Command as CommandSpec, CommandUser, ConnectOptions, DirEntry, Error, ExitStatus, ExposeSecret,
+    FileType,
     HostKeyPolicy, JumpHost, MemoizingPasswordManager, Metadata, NoPasswordManager, OpenOptions,
     Output, PasswordKind, PasswordManager, PasswordPrompter, PasswordRequest, PtyConfig,
-    ResolvedOptions, Result, RunAs, SecretString, SharedPasswordManager, SshConfig,
+    ResolvedOptions, Result, SecretString, SharedPasswordManager, SshConfig,
     SshConfigSource, StaticPasswordManager, Stdio, SudoError, TtyPrompter, shared,
 };
 
-pub use tues_sync::{Child, ChildStderr, ChildStdin, ChildStdout, Command, File, Session, Sftp};
+pub use tues_sync::{
+    Child, ChildSignaller, ChildStderr, ChildStdin, ChildStdout, Command, File, Session, Sftp,
+};
 
 /// Async API (tokio).
 pub mod aio {
-    pub use tues_async::{Child, ChildStderr, ChildStdin, ChildStdout, Command, File, Session, Sftp};
+    pub use tues_async::{
+        Child, ChildSignaller, ChildStderr, ChildStdin, ChildStdout, Command, File, Session, Sftp,
+    };
 }
