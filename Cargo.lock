@@ -3685,6 +3685,7 @@ dependencies = [
  "pyo3-async-runtimes",
  "tokio",
  "tues-async",
+ "tues-cli",
  "tues-core",
  "tues-sync",
 ]

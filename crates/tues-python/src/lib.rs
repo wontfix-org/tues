@@ -11,9 +11,20 @@ mod aio;
 mod common;
 mod sync;
 
+/// Run the `tues` command line with `argv` (program name first) and return
+/// its exit code. Backs the `tues` console script and `python -m tues`.
+///
+/// The interpreter's attach state is released for the duration: the CLI runs
+/// on its own tokio runtime and never calls back into Python.
+#[pyfunction]
+fn cli_main(py: Python<'_>, argv: Vec<std::ffi::OsString>) -> i32 {
+    py.detach(move || tues_cli::run(argv))
+}
+
 #[pymodule]
 fn _tues(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_function(wrap_pyfunction!(cli_main, m)?)?;
 
     m.add("PIPE", common::PIPE)?;
     m.add("STDOUT", common::STDOUT)?;

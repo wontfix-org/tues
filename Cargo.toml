@@ -22,6 +22,7 @@ tues-core = { path = "crates/tues-core", version = "0.1.0" }
 tues-async = { path = "crates/tues-async", version = "0.1.0" }
 tues-sync = { path = "crates/tues-sync", version = "0.1.0" }
 tues = { path = "crates/tues", version = "0.1.0" }
+tues-cli = { path = "crates/tues-cli", version = "0.1.0" }
 tues-testsupport = { path = "crates/tues-testsupport" }
 
 anyhow = "1"

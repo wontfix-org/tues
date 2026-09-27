@@ -8,6 +8,9 @@ from typing import Any, Awaitable, Callable, Literal, Optional, Sequence, Union
 
 __version__: str
 
+def cli_main(argv: Sequence[str]) -> int:
+    """Run the ``tues`` command line (``argv[0]`` is the program name) and return its exit code."""
+
 PIPE: int
 STDOUT: int
 DEVNULL: int

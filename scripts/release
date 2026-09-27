@@ -34,7 +34,7 @@ DIST = ROOT / "dist"
 DEFAULT_PYTHONS = ["3.9", "3.11", "3.12", "3.13"]
 MATURIN = "maturin>=1.7,<2"
 # Path dependencies in Cargo.toml that pin the workspace version.
-VERSIONED_PATH_DEPS = 4
+VERSIONED_PATH_DEPS = 5
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z.]+)?$")
 PYTHON_RE = re.compile(r"^[0-9]+\.[0-9]+$")

@@ -16,6 +16,7 @@ crate-type = ["cdylib", "rlib"]
 tues-core.workspace = true
 tues-async.workspace = true
 tues-sync.workspace = true
+tues-cli.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes.workspace = true
 tokio = { workspace = true, features = ["full"] }

@@ -373,6 +373,10 @@ pip install maturin
 maturin develop --release        # or: pip install .
 ```
 
+The package also installs the `tues` command described above (and
+`python -m tues`). It is the same Rust CLI, compiled into the extension module
+and started by a small console script, so no separate binary is needed.
+
 The Python API is shaped like the standard library: a `Session` is the
 `subprocess` module for one remote host, an `AsyncSession` is
 `asyncio.subprocess`. `run`, `Popen`, `CompletedProcess`, `CalledProcessError`,
@@ -567,8 +571,9 @@ pytest                                       # Python tests, also against Docker
 
 `scripts/release` sets the workspace version (the Python package reads it from
 there), commits it, and tags `v<version>`. It then builds an sdist and one
-wheel per CPython into `dist/` for an internal index. The tag is not pushed
-and the artifacts are not uploaded.
+wheel per CPython into `dist/` for an internal index. Each wheel carries the
+extension module and the `tues` console script. The tag is not pushed and the
+artifacts are not uploaded.
 
 ```sh
 scripts/release 0.2.0
