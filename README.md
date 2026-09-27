@@ -581,12 +581,12 @@ git push origin HEAD v0.2.0
 twine upload --repository-url "$TUES_PYPI_URL" dist/*
 ```
 
-By default that is Python 3.9, 3.11, 3.12 and 3.13. `uv python install`
-fetches a managed CPython for each of those, ignoring the project virtualenv,
-and `uvx` runs maturin against those binaries. Each wheel is tagged for that
-interpreter (`cp39`, `cp311`, `cp312`, `cp313`) and for the platform where the
-helper runs. The sdist is built first and the wheels are built from it. Change
-the set with `--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. `uv` is required.
+By default that is Python 3.9, 3.11, 3.12 and 3.13. The build runs in the
+`ghcr.io/pyo3/maturin` manylinux2014 container, which supplies those CPython
+builds and a glibc old enough for the `manylinux2014` tag. Each wheel is
+tagged for its interpreter (`cp39`, `cp311`, `cp312`, `cp313`). The sdist is
+built first and the wheels are built from it. Change the set with
+`--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. Docker is required.
 
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
