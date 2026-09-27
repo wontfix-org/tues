@@ -10,8 +10,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use tues_core::{
-    ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, PasswordKind, PasswordManager,
-    PasswordPrompter, SecretString, SshConfigSource, StaticPasswordManager, Stdio, shared,
+    ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, NoPasswordManager,
+    PasswordKind, PasswordManager, PasswordPrompter, SecretString, SshConfigSource,
+    StaticPasswordManager, Stdio, shared,
 };
 
 create_exception!(tues, TuesError, PyException, "Base class for tues errors.");
@@ -439,8 +440,19 @@ pub fn connect_options(
             o.ssh_config = SshConfigSource::File(p);
         }
     }
-    if let Some(pw) = kw::<String>(kwargs, "password")? {
-        o.password_manager = Some(shared(StaticPasswordManager::new(pw)));
+    if let Some(d) = kwargs
+        && let Some(v) = d.get_item("password")?
+    {
+        // `password=None` means there is no password. Leaving the argument
+        // out keeps the default, which prompts on the terminal.
+        if v.is_none() {
+            o.password_manager = Some(shared(NoPasswordManager));
+        } else {
+            let pw: String = v
+                .extract()
+                .map_err(|e: PyErr| PyValueError::new_err(format!("password: {e}")))?;
+            o.password_manager = Some(shared(StaticPasswordManager::new(pw)));
+        }
     }
     if let Some(d) = kwargs
         && let Some(v) = d.get_item("password_manager")?

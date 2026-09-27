@@ -443,7 +443,8 @@ class Session:
         ``compression``, ``use_agent``, ``pubkey_authentication``,
         ``password_authentication``, ``host_key_policy`` (``"strict"`` |
         ``"accept-new"`` | ``"off"``), ``known_hosts_file``, ``ssh_config``
-        (path, or ``False`` to disable), ``password`` (static),
+        (path, or ``False`` to disable), ``password`` (a static password, or
+        ``None`` to fail when one is required instead of prompting),
         ``password_manager`` (callable or object with ``get``/``invalidate``).
         """
         return cls(destination, **options)
