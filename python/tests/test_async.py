@@ -167,6 +167,26 @@ def test_communicate_and_signals(sshd):
     run(main())
 
 
+def test_session_files(sshd, tmp_path):
+    async def main():
+        async with await connect(sshd) as s:
+            src = tmp_path / "f.txt"
+            src.write_bytes(b"hi")
+            remote = f"/tmp/pytest-async-file-{os.getpid()}"
+            await s.upload(src, remote)
+            assert (await s.stat(remote)).size == 2
+            dest = tmp_path / "out.txt"
+            await s.download(remote, dest)
+            assert dest.read_bytes() == b"hi"
+            explicit = await s.sftp()
+            await explicit.close()
+            await s.delete(remote)
+            with pytest.raises(tues.SftpError):
+                await s.stat(remote)
+
+    run(main())
+
+
 def test_sftp(sshd):
     async def main():
         async with await connect(sshd) as s:

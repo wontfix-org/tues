@@ -14,6 +14,7 @@
 
 mod child;
 mod command;
+mod files;
 mod session;
 mod sftp;
 

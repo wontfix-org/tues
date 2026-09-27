@@ -158,6 +158,14 @@ fn main() -> tues::Result<()> {
     }
     sftp.close()?;
 
+    // File helpers use their own SFTP channel, opened on first use.
+    session.upload("notes.txt", "/tmp/notes.txt")?;
+    let meta = session.stat("/tmp/notes.txt")?;
+    assert!(meta.is_file());
+    session.download("/tmp/notes.txt", "notes-copy.txt")?;
+    session.rename("/tmp/notes.txt", "/tmp/notes-2.txt")?;
+    session.delete("/tmp/notes-2.txt")?;
+
     session.close()
 }
 ```
@@ -361,6 +369,13 @@ with tues.Session("alice@web01", user="root", host_key_policy="accept-new") as s
             f.write(b" world")
         print(sftp.read("/tmp/hello.txt"), sftp.stat("/tmp/hello.txt").size)
         print([e.name for e in sftp.listdir("/tmp")])
+
+    # Or skip the client. These share one cached channel, separate from sftp().
+    s.upload("notes.txt", "/tmp/notes.txt")
+    print(s.stat("/tmp/notes.txt").size)
+    s.download("/tmp/notes.txt", "notes-copy.txt")
+    s.rename("/tmp/notes.txt", "/tmp/notes-2.txt")
+    s.delete("/tmp/notes-2.txt")
 ```
 
 Also available: `call`, `check_call`, `getoutput`, `getstatusoutput`,

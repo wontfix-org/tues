@@ -3,6 +3,7 @@
 //! Every method returns an awaitable backed by a tokio future. This is the
 //! low-level layer under `tues.AsyncSession` / `tues.Process`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
@@ -120,6 +121,65 @@ impl AsyncSession {
                     stderr,
                 })
             })
+        })
+    }
+
+    /// Metadata for a remote file or directory.
+    ///
+    /// Shares a cached SFTP channel with `upload`, `download`, `delete` and
+    /// `rename`, separate from `sftp()`.
+    fn stat<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.inner.clone();
+        future_into_py(py, async move {
+            session.stat(path).await.map(Metadata).map_err(to_pyerr)
+        })
+    }
+
+    /// Copy a local file or directory to `remote`.
+    fn upload<'py>(
+        &self,
+        py: Python<'py>,
+        local: PathBuf,
+        remote: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.inner.clone();
+        future_into_py(py, async move {
+            session.upload(local, remote).await.map_err(to_pyerr)
+        })
+    }
+
+    /// Copy a remote file or directory to `local`.
+    fn download<'py>(
+        &self,
+        py: Python<'py>,
+        remote: String,
+        local: PathBuf,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.inner.clone();
+        future_into_py(py, async move {
+            session.download(remote, local).await.map_err(to_pyerr)
+        })
+    }
+
+    /// Remove a remote file, symlink or directory tree.
+    fn delete<'py>(&self, py: Python<'py>, path: String) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.inner.clone();
+        future_into_py(
+            py,
+            async move { session.delete(path).await.map_err(to_pyerr) },
+        )
+    }
+
+    /// Rename a remote file or directory.
+    fn rename<'py>(
+        &self,
+        py: Python<'py>,
+        src: String,
+        dst: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.inner.clone();
+        future_into_py(py, async move {
+            session.rename(src, dst).await.map_err(to_pyerr)
         })
     }
 

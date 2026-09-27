@@ -113,6 +113,28 @@ fn wait_timeout_and_signal_from_another_thread() {
 }
 
 #[test]
+fn session_file_helpers() {
+    let s = connect();
+    let id = std::process::id();
+    let local = std::env::temp_dir().join(format!("tues-sync-up-{id}"));
+    let down = std::env::temp_dir().join(format!("tues-sync-down-{id}"));
+    std::fs::write(&local, b"sync").unwrap();
+    let remote = format!("/tmp/tues-sync-file-{id}");
+    s.upload(&local, &remote).unwrap();
+    assert_eq!(s.stat(&remote).unwrap().len(), 4);
+    s.download(&remote, &down).unwrap();
+    assert_eq!(std::fs::read(&down).unwrap(), b"sync");
+    let renamed = format!("{remote}.2");
+    s.rename(&remote, &renamed).unwrap();
+    let explicit = s.sftp().unwrap();
+    explicit.close().unwrap();
+    s.delete(&renamed).unwrap();
+    assert!(s.stat(&renamed).is_err());
+    let _ = std::fs::remove_file(&local);
+    let _ = std::fs::remove_file(&down);
+}
+
+#[test]
 fn sftp_blocking_file_io() {
     let s = connect();
     let sftp = s.sftp().unwrap();

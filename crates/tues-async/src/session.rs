@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use tokio::sync::Mutex;
+
 use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::PublicKeyOrCertificate;
 use russh::keys::agent::AgentIdentity;
@@ -35,6 +37,9 @@ pub(crate) struct Inner {
     pub(crate) handle: Handle<ClientHandler>,
     pub(crate) opts: ResolvedOptions,
     closed: AtomicBool,
+    /// SFTP channel for [`Session::stat`] and the other file helpers.
+    /// Separate from channels returned by [`Session::sftp`].
+    files: Mutex<Option<Sftp>>,
     /// Keeps the jump host connection alive for the lifetime of this session.
     _via: Option<Session>,
 }
@@ -149,6 +154,7 @@ impl Session {
                 handle,
                 opts,
                 closed: AtomicBool::new(false),
+                files: Mutex::new(None),
                 _via: via,
             }),
         })
@@ -260,6 +266,59 @@ impl Session {
     /// access matches command execution.
     pub async fn sftp(&self) -> Result<Sftp> {
         self.ensure_open()?;
+        self.open_sftp().await
+    }
+
+    /// Metadata for a remote file or directory (follows symlinks).
+    ///
+    /// This, [`Session::upload`], [`Session::download`], [`Session::delete`]
+    /// and [`Session::rename`] share one SFTP channel. It is opened on the
+    /// first call and kept separate from channels returned by [`Session::sftp`].
+    pub async fn stat(&self, path: impl Into<String>) -> Result<tues_core::Metadata> {
+        self.file_client().await?.metadata(path).await
+    }
+
+    /// Copy a local file or directory to `remote`.
+    ///
+    /// A directory is copied recursively. Symlinks are recreated as symlinks
+    /// and are not followed.
+    pub async fn upload(&self, local: impl AsRef<Path>, remote: impl Into<String>) -> Result<()> {
+        crate::files::upload(&self.file_client().await?, local.as_ref(), &remote.into()).await
+    }
+
+    /// Copy a remote file or directory to `local`.
+    ///
+    /// A directory is copied recursively. Symlinks are recreated as symlinks
+    /// and are not followed.
+    pub async fn download(&self, remote: impl Into<String>, local: impl AsRef<Path>) -> Result<()> {
+        crate::files::download(&self.file_client().await?, &remote.into(), local.as_ref()).await
+    }
+
+    /// Remove a remote file, symlink or directory tree.
+    ///
+    /// A symlink is removed itself; its target is left in place.
+    pub async fn delete(&self, path: impl Into<String>) -> Result<()> {
+        crate::files::delete(&self.file_client().await?, &path.into()).await
+    }
+
+    /// Rename a remote file or directory.
+    pub async fn rename(&self, from: impl Into<String>, to: impl Into<String>) -> Result<()> {
+        self.file_client().await?.rename(from, to).await
+    }
+
+    /// The cached SFTP channel for the file helpers. Opened on first use.
+    async fn file_client(&self) -> Result<Sftp> {
+        self.ensure_open()?;
+        let mut slot = self.inner.files.lock().await;
+        if let Some(sftp) = slot.as_ref() {
+            return Ok(sftp.clone());
+        }
+        let sftp = self.open_sftp().await?;
+        *slot = Some(sftp.clone());
+        Ok(sftp)
+    }
+
+    async fn open_sftp(&self) -> Result<Sftp> {
         match self.inner.opts.user.as_deref() {
             Some(user) => self.open_sftp_as(user).await,
             None => self.open_sftp_subsystem().await,
@@ -369,6 +428,9 @@ impl Session {
     pub async fn close(&self) -> Result<()> {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
+        }
+        if let Some(sftp) = self.inner.files.lock().await.take() {
+            let _ = sftp.close().await;
         }
         self.inner
             .handle

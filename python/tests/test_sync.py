@@ -393,6 +393,30 @@ def test_getoutput(session):
 # ---------------------------------------------------------------------------
 
 
+def test_session_files(session, tmp_path):
+    src = tmp_path / "tree"
+    (src / "sub").mkdir(parents=True)
+    (src / "a.txt").write_bytes(b"aaa")
+    (src / "sub" / "b.txt").write_bytes(b"bbb")
+    (src / "link").symlink_to("a.txt")
+    remote = f"/tmp/pytest-files-{os.getpid()}"
+    session.upload(src, remote)
+    assert session.stat(f"{remote}/a.txt").size == 3
+    assert session.stat(f"{remote}/sub").is_dir
+    dest = tmp_path / "down"
+    session.download(remote, dest)
+    assert (dest / "a.txt").read_bytes() == b"aaa"
+    assert (dest / "sub" / "b.txt").read_bytes() == b"bbb"
+    assert os.readlink(dest / "link") == "a.txt"
+    session.rename(f"{remote}/a.txt", f"{remote}/c.txt")
+    explicit = session.sftp()
+    explicit.close()
+    assert session.stat(f"{remote}/c.txt").is_file
+    session.delete(remote)
+    with pytest.raises(tues.SftpError):
+        session.stat(remote)
+
+
 def test_sftp(session):
     with session.sftp() as sftp:
         path = "/tmp/pytest-sync.txt"

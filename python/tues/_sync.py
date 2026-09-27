@@ -482,8 +482,39 @@ class Session:
     def __repr__(self) -> str:
         return repr(self._inner)
 
+    def stat(self, path: str):
+        """Metadata for a remote file or directory.
+
+        This and :meth:`upload`, :meth:`download`, :meth:`delete`, :meth:`rename`
+        share one SFTP connection, opened on first use and kept separate from
+        :meth:`sftp`. It runs as the session user.
+        """
+        return self._inner.stat(path)
+
+    def upload(self, local: Union[str, bytes, "os.PathLike[Any]"], remote: str) -> None:
+        """Copy a local file or directory to ``remote``.
+
+        A directory is copied recursively. Symlinks are recreated as symlinks.
+        """
+        self._inner.upload(os.fspath(local), remote)
+
+    def download(self, remote: str, local: Union[str, bytes, "os.PathLike[Any]"]) -> None:
+        """Copy a remote file or directory to ``local``.
+
+        A directory is copied recursively. Symlinks are recreated as symlinks.
+        """
+        self._inner.download(remote, os.fspath(local))
+
+    def delete(self, path: str) -> None:
+        """Remove a remote file, symlink or directory tree."""
+        self._inner.delete(path)
+
+    def rename(self, src: str, dst: str) -> None:
+        """Rename a remote file or directory."""
+        self._inner.rename(src, dst)
+
     def sftp(self) -> Sftp:
-        """Open an SFTP session."""
+        """Open an SFTP session, separate from :meth:`stat` and the other file helpers."""
         return self._inner.sftp()
 
     # -- subprocess module surface --------------------------------------------

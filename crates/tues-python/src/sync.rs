@@ -6,6 +6,7 @@
 //! `CompletedProcess`, ...).
 
 use std::io::{Read, Seek, Write};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use pyo3::exceptions::PyValueError;
@@ -135,6 +136,44 @@ impl Session {
             stdout,
             stderr,
         })
+    }
+
+    /// Metadata for a remote file or directory.
+    ///
+    /// Shares a cached SFTP channel with `upload`, `download`, `delete` and
+    /// `rename`, separate from `sftp()`.
+    fn stat(&self, py: Python<'_>, path: String) -> PyResult<Metadata> {
+        let session = self.inner.clone();
+        py.detach(move || session.stat(path))
+            .map(Metadata)
+            .map_err(to_pyerr)
+    }
+
+    /// Copy a local file or directory to `remote`.
+    fn upload(&self, py: Python<'_>, local: PathBuf, remote: String) -> PyResult<()> {
+        let session = self.inner.clone();
+        py.detach(move || session.upload(local, remote))
+            .map_err(to_pyerr)
+    }
+
+    /// Copy a remote file or directory to `local`.
+    fn download(&self, py: Python<'_>, remote: String, local: PathBuf) -> PyResult<()> {
+        let session = self.inner.clone();
+        py.detach(move || session.download(remote, local))
+            .map_err(to_pyerr)
+    }
+
+    /// Remove a remote file, symlink or directory tree.
+    fn delete(&self, py: Python<'_>, path: String) -> PyResult<()> {
+        let session = self.inner.clone();
+        py.detach(move || session.delete(path)).map_err(to_pyerr)
+    }
+
+    /// Rename a remote file or directory.
+    fn rename(&self, py: Python<'_>, src: String, dst: String) -> PyResult<()> {
+        let session = self.inner.clone();
+        py.detach(move || session.rename(src, dst))
+            .map_err(to_pyerr)
     }
 
     /// Open an SFTP session.

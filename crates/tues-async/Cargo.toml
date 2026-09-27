@@ -13,7 +13,7 @@ bytes.workspace = true
 futures.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tokio-util = "0.7"
 tracing.workspace = true
 

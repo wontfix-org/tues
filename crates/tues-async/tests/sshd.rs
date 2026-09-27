@@ -435,6 +435,73 @@ async fn sftp_as_session_user_uses_sudo() {
 }
 
 #[tokio::test]
+async fn session_file_helpers_use_their_own_channel() {
+    let s = connect().await;
+    let id = std::process::id();
+    let local = std::env::temp_dir().join(format!("tues-up-{id}"));
+    let downloaded = std::env::temp_dir().join(format!("tues-down-{id}"));
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_dir_all(&downloaded);
+    std::fs::create_dir(&local).unwrap();
+    std::fs::write(local.join("a.txt"), b"aaa").unwrap();
+    std::fs::create_dir(local.join("sub")).unwrap();
+    std::fs::write(local.join("sub").join("b.txt"), b"bbb").unwrap();
+    std::os::unix::fs::symlink("a.txt", local.join("link")).unwrap();
+
+    let remote = format!("/tmp/tues-files-{id}");
+    s.upload(&local, &remote).await.unwrap();
+    let md = s.stat(format!("{remote}/a.txt")).await.unwrap();
+    assert!(md.is_file());
+    assert_eq!(md.len(), 3);
+    assert!(s.stat(format!("{remote}/sub")).await.unwrap().is_dir());
+    assert!(s.stat(format!("{remote}/link")).await.unwrap().is_file());
+
+    s.download(&remote, &downloaded).await.unwrap();
+    assert_eq!(std::fs::read(downloaded.join("a.txt")).unwrap(), b"aaa");
+    assert_eq!(
+        std::fs::read(downloaded.join("sub").join("b.txt")).unwrap(),
+        b"bbb"
+    );
+    assert_eq!(
+        std::fs::read_link(downloaded.join("link"))
+            .unwrap()
+            .as_os_str(),
+        "a.txt"
+    );
+
+    s.rename(format!("{remote}/a.txt"), format!("{remote}/c.txt"))
+        .await
+        .unwrap();
+    // Closing an explicit client must not drop the cached one.
+    let explicit = s.sftp().await.unwrap();
+    explicit.close().await.unwrap();
+    assert!(s.stat(format!("{remote}/c.txt")).await.unwrap().is_file());
+    s.delete(&remote).await.unwrap();
+    assert!(s.stat(&remote).await.is_err());
+    let _ = std::fs::remove_dir_all(&local);
+    let _ = std::fs::remove_dir_all(&downloaded);
+
+    let mut opts = sshd().connect_options();
+    opts.user = Some(NOPASSWD_USER.into());
+    let s = Session::connect(opts).await.unwrap();
+    let one = std::env::temp_dir().join(format!("tues-one-{id}"));
+    std::fs::write(&one, b"z").unwrap();
+    let path = format!("/home/{NOPASSWD_USER}/tues-up-{id}");
+    s.upload(&one, &path).await.unwrap();
+    let owner = s
+        .command("stat")
+        .arg("-c")
+        .arg("%U")
+        .arg(&path)
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(owner.stdout_lossy().trim(), NOPASSWD_USER);
+    s.delete(&path).await.unwrap();
+    let _ = std::fs::remove_file(&one);
+}
+
+#[tokio::test]
 async fn sftp_roundtrip() {
     let s = connect().await;
     let sftp = s.sftp().await.unwrap();

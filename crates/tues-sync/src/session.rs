@@ -1,6 +1,7 @@
+use std::path::Path;
 use std::sync::Arc;
 
-use tues_core::{ConnectOptions, ExitStatus, Output, ResolvedOptions, Result};
+use tues_core::{ConnectOptions, ExitStatus, Metadata, Output, ResolvedOptions, Result};
 
 use crate::Runtime;
 use crate::child::Child;
@@ -93,10 +94,61 @@ impl Session {
         self.rt.block_on(self.inner.status(cmd))
     }
 
+    /// Metadata for a remote file or directory (follows symlinks).
+    ///
+    /// This, [`Session::upload`], [`Session::download`], [`Session::delete`]
+    /// and [`Session::rename`] share one SFTP channel, opened on the first
+    /// call and kept separate from [`Session::sftp`].
+    pub fn stat(&self, path: impl Into<String>) -> Result<Metadata> {
+        let path = path.into();
+        let inner = self.inner.clone();
+        self.rt.block_on(inner.stat(path))
+    }
+
+    /// Copy a local file or directory to `remote`.
+    ///
+    /// A directory is copied recursively. Symlinks are recreated as symlinks
+    /// and are not followed.
+    pub fn upload(&self, local: impl AsRef<Path>, remote: impl Into<String>) -> Result<()> {
+        let local = local.as_ref().to_path_buf();
+        let remote = remote.into();
+        let inner = self.inner.clone();
+        self.rt.block_on(inner.upload(local, remote))
+    }
+
+    /// Copy a remote file or directory to `local`.
+    ///
+    /// A directory is copied recursively. Symlinks are recreated as symlinks
+    /// and are not followed.
+    pub fn download(&self, remote: impl Into<String>, local: impl AsRef<Path>) -> Result<()> {
+        let remote = remote.into();
+        let local = local.as_ref().to_path_buf();
+        let inner = self.inner.clone();
+        self.rt.block_on(inner.download(remote, local))
+    }
+
+    /// Remove a remote file, symlink or directory tree.
+    ///
+    /// A symlink is removed itself; its target is left in place.
+    pub fn delete(&self, path: impl Into<String>) -> Result<()> {
+        let path = path.into();
+        let inner = self.inner.clone();
+        self.rt.block_on(inner.delete(path))
+    }
+
+    /// Rename a remote file or directory.
+    pub fn rename(&self, from: impl Into<String>, to: impl Into<String>) -> Result<()> {
+        let from = from.into();
+        let to = to.into();
+        let inner = self.inner.clone();
+        self.rt.block_on(inner.rename(from, to))
+    }
+
     /// Open an SFTP channel.
     ///
     /// Runs as the session's default user (via `sudo`) when one is set, and
-    /// as the login user otherwise.
+    /// as the login user otherwise. This channel is not the one used by
+    /// [`Session::stat`] and the other file helpers.
     pub fn sftp(&self) -> Result<Sftp> {
         let sftp = self.rt.block_on(self.inner.sftp())?;
         Ok(Sftp::new(sftp, self.rt.clone()))
