@@ -170,9 +170,13 @@ def build(interpreters: Sequence[str]) -> None:
     # One sdist, then a wheel per interpreter built from it. Maturin tags each
     # wheel for that CPython ABI and the lowest manylinux (or native) platform
     # the extension actually requires.
+    #
+    # The sdist keeps only the crates the extension needs, so its workspace
+    # members no longer match the repo lock file. `--locked` rejects that
+    # local prune. `--offline` still refuses to fetch new crates.
     cmd = [
         "uvx", "--from", MATURIN, "maturin", "build",
-        "--release", "--locked", "--strip", "--sdist", "--out", str(DIST),
+        "--release", "--offline", "--strip", "--sdist", "--out", str(DIST),
     ]
     for interpreter in interpreters:
         cmd += ["-i", interpreter]
