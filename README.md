@@ -47,10 +47,11 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
-  -j, --jobs <N>             Hosts worked on concurrently (default: 1)
+  -j, -n, --jobs <N>         Hosts worked on concurrently (default: 1)
+  -p, --parallel             Up to 20 hosts at once, unless `-j` or `-n` is set
       --check                Stop after the first failure (one job only)
       --no-check             Keep going after a failure (default)
-  -p, --port <PORT>          SSH port
+      --port <PORT>          SSH port
   -i, --identity <FILE>      Identity file; may be repeated
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
       --no-ssh-config        Do not read any ssh_config
@@ -125,8 +126,9 @@ directory under its own name and deletes it once the command has finished.
 directory receives the file inside it, like `cp`. Escape a literal `:` as `\:`
 and a literal `\` as `\\`. Uploads run as the command user.
 
-Hosts are visited one after another. `-j` raises how many run at once. With
-several hosts each output line is prefixed with `host: `, and the exit status
+Hosts are visited one after another. `-j` and `-n` raise how many run at once,
+and `-p` runs 20 at a time when neither is set. With several hosts each output
+line is prefixed with `host: `, and the exit status
 is `0` only if every host succeeded. With one host, output is passed through
 unchanged and the exit status is the remote one (`255` on connection errors,
 like `ssh`). `--check` stops at the first host that fails or exits non-zero;

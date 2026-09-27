@@ -77,9 +77,13 @@ struct Cli {
     #[arg(short = 'u', long)]
     user: Option<String>,
 
-    /// Maximum number of hosts worked on concurrently.
-    #[arg(short = 'j', long, default_value_t = 1)]
-    jobs: usize,
+    /// Hosts worked on concurrently (default: 1, or 20 with `-p`).
+    #[arg(short = 'j', visible_short_alias = 'n', long, value_name = "N")]
+    jobs: Option<usize>,
+
+    /// Work on up to 20 hosts at once. Has no effect when `-j` or `-n` is set.
+    #[arg(short = 'p', long, action = clap::ArgAction::SetTrue)]
+    parallel: bool,
 
     /// Stop after the first host that fails or exits non-zero.
     /// Only valid with one job at a time.
@@ -91,7 +95,7 @@ struct Cli {
     no_check: bool,
 
     /// SSH port.
-    #[arg(short = 'p', long)]
+    #[arg(long)]
     port: Option<u16>,
 
     /// Identity (private key) file; may be repeated.
@@ -326,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     };
 
-    let jobs = cli.jobs.max(1);
+    let jobs = cli.job_count();
     if cli.fail_fast() && jobs != 1 {
         anyhow::bail!("--check only works with one job at a time");
     }
@@ -428,6 +432,16 @@ impl Cli {
     /// Stop at the first unsuccessful host unless `--no-check` was given last.
     fn fail_fast(&self) -> bool {
         self.check && !self.no_check
+    }
+
+    /// `-j`/`-n` choose the count. `-p` means 20 when neither was given.
+    fn job_count(&self) -> usize {
+        const PARALLEL_JOBS: usize = 20;
+        match self.jobs {
+            Some(n) => n.max(1),
+            None if self.parallel => PARALLEL_JOBS,
+            None => 1,
+        }
     }
 }
 
@@ -1059,6 +1073,24 @@ mod tests {
             Some(value) => unsafe { std::env::set_var("COLUMNS", value) },
             None => unsafe { std::env::remove_var("COLUMNS") },
         }
+    }
+
+    #[test]
+    fn parallel_flag_sets_twenty_jobs_unless_a_count_is_given() {
+        let cli = super::Cli::try_parse_from(["tues", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 1);
+
+        let cli = super::Cli::try_parse_from(["tues", "-p", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 20);
+
+        let cli = super::Cli::try_parse_from(["tues", "-n", "4", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 4);
+
+        let cli = super::Cli::try_parse_from(["tues", "-p", "-j", "3", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 3);
+
+        let cli = super::Cli::try_parse_from(["tues", "-n", "0", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 1);
     }
 
     #[test]

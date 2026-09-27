@@ -12,7 +12,7 @@ fn tues() -> Command {
     c.arg("--no-ssh-config")
         .arg("--host-key-check")
         .arg("off")
-        .arg("-p")
+        .arg("--port")
         .arg(f.port.to_string())
         .arg("-i")
         .arg(&f.key_path)
