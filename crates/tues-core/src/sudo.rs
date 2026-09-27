@@ -40,7 +40,9 @@ pub enum SudoOutput {
     Stderr(Bytes),
     /// sudo printed its prompt. `retry` is `true` when a password had already
     /// been sent, i.e. the previous one was wrong.
-    NeedPassword { retry: bool },
+    NeedPassword {
+        retry: bool,
+    },
     /// The success marker was seen; the command is running.
     Elevated,
 }
@@ -264,7 +266,10 @@ impl SudoFilter {
             v = remove_all_followed_by_newline(&v, pw);
         }
         if self.after_prompt {
-            let skip = v.iter().take_while(|b| **b == b'\r' || **b == b'\n').count();
+            let skip = v
+                .iter()
+                .take_while(|b| **b == b'\r' || **b == b'\n')
+                .count();
             v.drain(..skip);
             self.after_prompt = false;
         }
@@ -290,7 +295,10 @@ fn remove_all_followed_by_newline(data: &[u8], needle: &[u8]) -> Vec<u8> {
     while let Some(i) = find(rest, needle) {
         out.extend_from_slice(&rest[..i]);
         rest = &rest[i + needle.len()..];
-        let skip = rest.iter().take_while(|b| **b == b'\r' || **b == b'\n').count();
+        let skip = rest
+            .iter()
+            .take_while(|b| **b == b'\r' || **b == b'\n')
+            .count();
         rest = &rest[skip..];
     }
     out.extend_from_slice(rest);
@@ -366,7 +374,10 @@ mod tests {
         assert_eq!(out, vec![SudoOutput::Elevated]);
         out.clear();
         f.stderr(b"cmd stderr", &mut out);
-        assert_eq!(out, vec![SudoOutput::Stderr(Bytes::from_static(b"cmd stderr"))]);
+        assert_eq!(
+            out,
+            vec![SudoOutput::Stderr(Bytes::from_static(b"cmd stderr"))]
+        );
     }
 
     #[test]
@@ -431,7 +442,10 @@ mod tests {
         f.stdout(b"XYZ", &mut out);
         assert_eq!(
             out,
-            vec![SudoOutput::Elevated, SudoOutput::Stdout(Bytes::from_static(b"XYZ"))]
+            vec![
+                SudoOutput::Elevated,
+                SudoOutput::Stdout(Bytes::from_static(b"XYZ"))
+            ]
         );
         assert!(!f.elevated());
     }

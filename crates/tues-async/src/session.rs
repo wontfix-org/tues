@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
+use russh::keys::PublicKeyOrCertificate;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
-use russh::keys::PublicKeyOrCertificate;
 use russh::{ChannelMsg, Disconnect};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
@@ -101,13 +101,16 @@ impl Session {
                     reason: e.to_string(),
                 })?;
                 let _ = stream.set_nodelay(true);
-                with_timeout(opts.connect_timeout, client::connect_stream(config, stream, handler))
-                    .await
-                    .ok_or_else(|| Error::ConnectTimeout {
-                        host: opts.host_name.clone(),
-                        port: opts.port,
-                    })?
-                    .map_err(connect_err)?
+                with_timeout(
+                    opts.connect_timeout,
+                    client::connect_stream(config, stream, handler),
+                )
+                .await
+                .ok_or_else(|| Error::ConnectTimeout {
+                    host: opts.host_name.clone(),
+                    port: opts.port,
+                })?
+                .map_err(connect_err)?
             }
             Some(jump) => {
                 let channel = jump
@@ -126,13 +129,16 @@ impl Session {
                         reason: format!("via {}: {e}", jump.inner.opts.host_name),
                     })?;
                 let stream = channel.into_stream();
-                with_timeout(opts.connect_timeout, client::connect_stream(config, stream, handler))
-                    .await
-                    .ok_or_else(|| Error::ConnectTimeout {
-                        host: opts.host_name.clone(),
-                        port: opts.port,
-                    })?
-                    .map_err(connect_err)?
+                with_timeout(
+                    opts.connect_timeout,
+                    client::connect_stream(config, stream, handler),
+                )
+                .await
+                .ok_or_else(|| Error::ConnectTimeout {
+                    host: opts.host_name.clone(),
+                    port: opts.port,
+                })?
+                .map_err(connect_err)?
             }
         };
 
@@ -347,7 +353,9 @@ fn map_connect_error(e: russh::Error, opts: &ResolvedOptions) -> Error {
 
 pub(crate) fn map_channel_error(e: russh::Error) -> Error {
     match e {
-        russh::Error::SendError | russh::Error::Disconnect | russh::Error::HUP => Error::Disconnected,
+        russh::Error::SendError | russh::Error::Disconnect | russh::Error::HUP => {
+            Error::Disconnected
+        }
         russh::Error::IO(e) => Error::Io(e),
         other => Error::protocol(other),
     }
@@ -395,7 +403,12 @@ impl client::Handler for ClientHandler {
                 }
                 if self.policy == HostKeyPolicy::AcceptNew {
                     warn!(host = %self.host, port = self.port, "adding new host key to {}", self.known_hosts.display());
-                    russh::keys::known_hosts::learn_known_hosts_path(&self.host, self.port, &key, &self.known_hosts)?;
+                    russh::keys::known_hosts::learn_known_hosts_path(
+                        &self.host,
+                        self.port,
+                        &key,
+                        &self.known_hosts,
+                    )?;
                     return Ok(true);
                 }
                 Err(russh::Error::UnknownKey)
@@ -450,7 +463,11 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
     let mut tried: Vec<String> = Vec::new();
 
     // "none" first: succeeds on open servers and tells us the allowed methods.
-    match handle.authenticate_none(login_user.clone()).await.map_err(proto)? {
+    match handle
+        .authenticate_none(login_user.clone())
+        .await
+        .map_err(proto)?
+    {
         r if r.success() => return Ok(()),
         _ => {}
     }
@@ -498,7 +515,10 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
             };
             let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
             let r = handle
-                .authenticate_publickey(login_user.clone(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                .authenticate_publickey(
+                    login_user.clone(),
+                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                )
                 .await
                 .map_err(proto)?;
             if r.success() {
@@ -512,7 +532,8 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
         let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
         for attempt in 0..3u32 {
             tried.push("password".into());
-            let pw = match request_password(&opts.password_manager, req.clone(), attempt > 0).await {
+            let pw = match request_password(&opts.password_manager, req.clone(), attempt > 0).await
+            {
                 Ok(pw) => pw,
                 Err(e) => {
                     debug!("no login password: {e}");
@@ -527,7 +548,9 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
             if r.success() {
                 return Ok(());
             }
-            if let russh::client::AuthResult::Failure { remaining_methods, .. } = &r
+            if let russh::client::AuthResult::Failure {
+                remaining_methods, ..
+            } = &r
                 && !remaining_methods.contains(&russh::MethodKind::Password)
             {
                 break;
@@ -547,7 +570,9 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
             loop {
                 match resp {
                     KeyboardInteractiveAuthResponse::Success => return Ok(()),
-                    KeyboardInteractiveAuthResponse::Failure { remaining_methods, .. } => {
+                    KeyboardInteractiveAuthResponse::Failure {
+                        remaining_methods, ..
+                    } => {
                         tried.push("keyboard-interactive".into());
                         if !remaining_methods.contains(&russh::MethodKind::KeyboardInteractive)
                             || pw.is_none()
@@ -578,7 +603,11 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
                                     }
                                 }
                                 use tues_core::ExposeSecret;
-                                answers.push(pw.as_ref().map(|p| p.expose_secret().to_string()).unwrap_or_default());
+                                answers.push(
+                                    pw.as_ref()
+                                        .map(|p| p.expose_secret().to_string())
+                                        .unwrap_or_default(),
+                                );
                             }
                         }
                         resp = handle
@@ -599,10 +628,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
     Err(auth_err(reason))
 }
 
-async fn rsa_hash(
-    handle: &Handle<ClientHandler>,
-    is_rsa: bool,
-) -> Option<russh::keys::HashAlg> {
+async fn rsa_hash(handle: &Handle<ClientHandler>, is_rsa: bool) -> Option<russh::keys::HashAlg> {
     if !is_rsa {
         return None;
     }

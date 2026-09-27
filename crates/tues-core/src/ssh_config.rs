@@ -172,7 +172,12 @@ impl SshConfig {
                     self.push_block(std::mem::replace(
                         &mut current,
                         Block {
-                            patterns: Some(split_words(&value).iter().map(|s| Pattern::parse(s)).collect()),
+                            patterns: Some(
+                                split_words(&value)
+                                    .iter()
+                                    .map(|s| Pattern::parse(s))
+                                    .collect(),
+                            ),
                             entries: Vec::new(),
                         },
                     ));
@@ -257,8 +262,13 @@ impl SshConfig {
             .collect();
         if let Some(k) = &p.user_known_hosts_file {
             let s = k.to_string_lossy().into_owned();
-            p.user_known_hosts_file =
-                Some(expand_path(&expand_tokens(&s, host, &hostname, &login_user, port)));
+            p.user_known_hosts_file = Some(expand_path(&expand_tokens(
+                &s,
+                host,
+                &hostname,
+                &login_user,
+                port,
+            )));
         }
         p
     }
@@ -283,7 +293,11 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             Some(if value.eq_ignore_ascii_case("none") {
                 Vec::new()
             } else {
-                value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
             })
         ),
         "stricthostkeychecking" => first!(p.strict_host_key_checking, HostKeyPolicy::parse(value)),
@@ -291,10 +305,17 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             p.user_known_hosts_file,
             split_words(value).first().map(PathBuf::from)
         ),
-        "connecttimeout" => first!(p.connect_timeout, value.parse().ok().map(Duration::from_secs)),
+        "connecttimeout" => first!(
+            p.connect_timeout,
+            value.parse().ok().map(Duration::from_secs)
+        ),
         "serveraliveinterval" => first!(
             p.server_alive_interval,
-            value.parse().ok().filter(|s: &u64| *s > 0).map(Duration::from_secs)
+            value
+                .parse()
+                .ok()
+                .filter(|s: &u64| *s > 0)
+                .map(Duration::from_secs)
         ),
         "compression" => first!(p.compression, yes_no(value)),
         "pubkeyauthentication" => first!(p.pubkey_authentication, yes_no(value)),
@@ -515,7 +536,10 @@ Host *
         assert_eq!(p.strict_host_key_checking, Some(HostKeyPolicy::AcceptNew));
         assert_eq!(p.compression, Some(true));
         assert_eq!(p.connect_timeout, Some(Duration::from_secs(5)));
-        assert_eq!(p.unknown, vec![("somethingunknown".to_string(), "value".to_string())]);
+        assert_eq!(
+            p.unknown,
+            vec![("somethingunknown".to_string(), "value".to_string())]
+        );
 
         let p = cfg.query("web02");
         assert_eq!(p.login_user.as_deref(), Some("bob"));

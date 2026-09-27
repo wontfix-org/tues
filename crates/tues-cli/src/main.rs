@@ -170,8 +170,9 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(format!("tues={level},tues_async={level}"))),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(format!("tues={level},tues_async={level}"))
+            }),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -235,7 +236,11 @@ async fn main() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
-fn connect_options(cli: &Cli, server: &str, pm: tues_core::SharedPasswordManager) -> ConnectOptions {
+fn connect_options(
+    cli: &Cli,
+    server: &str,
+    pm: tues_core::SharedPasswordManager,
+) -> ConnectOptions {
     let mut o = ConnectOptions::new(server).password_manager(pm);
     if let Some(u) = &cli.login_user {
         o = o.login_user(u.clone());

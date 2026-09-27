@@ -14,7 +14,9 @@ use tues_core::{
 use tues_testsupport::{NOPASSWD_USER, PASSWORD, USER, sshd};
 
 async fn connect() -> Session {
-    Session::connect(sshd().connect_options()).await.expect("connect")
+    Session::connect(sshd().connect_options())
+        .await
+        .expect("connect")
 }
 
 #[tokio::test]
@@ -87,7 +89,9 @@ async fn stdin_is_forwarded() {
 #[tokio::test]
 async fn large_binary_roundtrip() {
     let s = connect().await;
-    let data: Vec<u8> = (0..2_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    let data: Vec<u8> = (0..2_000_000u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+        .collect();
     let mut child = s.command("cat").spawn().await.unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let payload = data.clone();
@@ -104,7 +108,13 @@ async fn large_binary_roundtrip() {
 #[tokio::test]
 async fn sudo_with_password_removes_conversation() {
     let s = connect().await;
-    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user("root")
+        .output()
+        .await
+        .unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(out.stderr_lossy(), "", "stderr must not contain the prompt");
@@ -120,8 +130,14 @@ async fn sudo_binary_stdout_containing_nonces_is_intact() {
     );
     let out = s.shell(&script).user("root").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
-    assert!(out.stdout.starts_with(b"[tues-sudo-[tues-ok-tuespassSorry, try again.\n"));
-    assert_eq!(out.stdout.len(), "[tues-sudo-[tues-ok-tuespassSorry, try again.\n".len() + 300000 + 256);
+    assert!(
+        out.stdout
+            .starts_with(b"[tues-sudo-[tues-ok-tuespassSorry, try again.\n")
+    );
+    assert_eq!(
+        out.stdout.len(),
+        "[tues-sudo-[tues-ok-tuespassSorry, try again.\n".len() + 300000 + 256
+    );
     let tail = &out.stdout[out.stdout.len() - 256..];
     let expected: Vec<u8> = (0..=255u8).collect();
     assert_eq!(tail, &expected[..]);
@@ -151,18 +167,30 @@ impl tues_core::PasswordPrompter for FlakyPrompter {
     fn prompt(&mut self, req: &PasswordRequest) -> tues_core::Result<SecretString> {
         let mut calls = self.calls.lock().unwrap();
         calls.push(req.clone());
-        Ok(SecretString::from(if calls.len() == 1 { "wrong" } else { PASSWORD }))
+        Ok(SecretString::from(if calls.len() == 1 {
+            "wrong"
+        } else {
+            PASSWORD
+        }))
     }
 }
 
 #[tokio::test]
 async fn sudo_wrong_password_is_invalidated_and_retried() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let pm = shared(MemoizingPasswordManager::new(FlakyPrompter { calls: calls.clone() }));
+    let pm = shared(MemoizingPasswordManager::new(FlakyPrompter {
+        calls: calls.clone(),
+    }));
     let mut o = sshd().connect_options();
     o.password_manager = Some(pm);
     let s = Session::connect(o).await.unwrap();
-    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user("root")
+        .output()
+        .await
+        .unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(out.stderr_lossy(), "");
@@ -173,7 +201,13 @@ async fn sudo_wrong_password_is_invalidated_and_retried() {
         assert_eq!(calls[0].user.as_deref(), Some("root"));
     }
     // Second command must use the memoized password (no new prompt).
-    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user("root")
+        .output()
+        .await
+        .unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
     assert_eq!(calls.lock().unwrap().len(), 2);
 }
@@ -183,7 +217,12 @@ async fn sudo_always_wrong_password_reports_auth_failed() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("definitely-wrong")));
     let s = Session::connect(o).await.unwrap();
-    let err = s.command("id").user("root").output().await.expect_err("must fail");
+    let err = s
+        .command("id")
+        .user("root")
+        .output()
+        .await
+        .expect_err("must fail");
     assert!(
         matches!(err, Error::Sudo(SudoError::AuthFailed { attempts: 3 })),
         "{err}"
@@ -203,7 +242,12 @@ async fn sudo_without_password_manager_fails_cleanly() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
-    let err = s.command("id").user("root").output().await.expect_err("must fail");
+    let err = s
+        .command("id")
+        .user("root")
+        .output()
+        .await
+        .expect_err("must fail");
     assert!(
         matches!(err, Error::Sudo(SudoError::PasswordRequired { .. })),
         "{err}"
@@ -215,7 +259,13 @@ async fn sudo_nopasswd_target_needs_no_prompt() {
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
-    let out = s.command("id").arg("-un").user(NOPASSWD_USER).output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user(NOPASSWD_USER)
+        .output()
+        .await
+        .unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout_lossy().trim(), NOPASSWD_USER);
 }
@@ -238,7 +288,12 @@ async fn sudo_with_pty() {
 #[tokio::test]
 async fn pty_without_sudo() {
     let s = connect().await;
-    let out = s.shell("tty >/dev/null && echo has-tty").pty(true).output().await.unwrap();
+    let out = s
+        .shell("tty >/dev/null && echo has-tty")
+        .pty(true)
+        .output()
+        .await
+        .unwrap();
     assert_eq!(out.stdout_lossy(), "has-tty\r\n");
 }
 
@@ -249,7 +304,13 @@ async fn session_default_user_and_override() {
     let s = Session::connect(o).await.unwrap();
     let out = s.command("id").arg("-un").output().await.unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
-    let out = s.command("id").arg("-un").as_login_user().output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .as_login_user()
+        .output()
+        .await
+        .unwrap();
     assert_eq!(out.stdout_lossy(), format!("{USER}\n"));
 }
 
@@ -399,7 +460,9 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
     let mut o = f.connect_options();
     o.host_key_policy = Some(HostKeyPolicy::Strict);
     o.known_hosts_file = Some(kh.clone());
-    let err = Session::connect(o).await.expect_err("unknown key must be rejected");
+    let err = Session::connect(o)
+        .await
+        .expect_err("unknown key must be rejected");
     assert!(matches!(err, Error::UnknownHostKey { .. }), "{err}");
 
     let mut o = f.connect_options();
@@ -407,7 +470,10 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
     o.known_hosts_file = Some(kh.clone());
     Session::connect(o).await.expect("accept-new");
     let content = std::fs::read_to_string(&kh).unwrap();
-    assert!(content.contains(&format!("[{}]:{}", f.host, f.port)), "{content}");
+    assert!(
+        content.contains(&format!("[{}]:{}", f.host, f.port)),
+        "{content}"
+    );
 
     let mut o = f.connect_options();
     o.host_key_policy = Some(HostKeyPolicy::Strict);
@@ -418,11 +484,19 @@ async fn strict_host_key_policy_rejects_unknown_and_accept_new_learns() {
 
 #[tokio::test]
 async fn proxy_jump_through_second_container() {
-    let s = Session::connect(sshd().via_jump_options()).await.expect("connect via jump");
+    let s = Session::connect(sshd().via_jump_options())
+        .await
+        .expect("connect via jump");
     let out = s.command("hostname").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     // Sudo still works through the jump.
-    let out = s.command("id").arg("-un").user("root").output().await.unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user("root")
+        .output()
+        .await
+        .unwrap();
     assert_eq!(out.stdout_lossy(), "root\n");
 }
 
@@ -433,7 +507,11 @@ async fn concurrent_commands_on_one_session() {
     for i in 0..8 {
         let s = s.clone();
         handles.push(tokio::spawn(async move {
-            s.shell(format!("echo {i}")).user("root").output().await.unwrap()
+            s.shell(format!("echo {i}"))
+                .user("root")
+                .output()
+                .await
+                .unwrap()
         }));
     }
     for (i, h) in handles.into_iter().enumerate() {

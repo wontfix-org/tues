@@ -49,7 +49,11 @@ fn multiple_hosts_with_sudo_and_prefixes() {
         .arg(format!("{}:{}", f.host, f.port))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let mut lines: Vec<&str> = stdout.lines().collect();
     lines.sort();
@@ -61,7 +65,11 @@ fn multiple_hosts_with_sudo_and_prefixes() {
             format!("{}@{}: root", USER, f.host),
         ]
     );
-    assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -93,8 +101,14 @@ fn unreachable_hosts_report_errors_and_ipv6_ports_are_parsed() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("127.0.0.1:1: error: could not connect to 127.0.0.1:1"), "{stderr}");
-    assert!(stderr.contains("[::1]:1: error: could not connect to ::1:1"), "{stderr}");
+    assert!(
+        stderr.contains("127.0.0.1:1: error: could not connect to 127.0.0.1:1"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[::1]:1: error: could not connect to ::1:1"),
+        "{stderr}"
+    );
     assert!(!stderr.contains(&format!("{}: error", f.host)), "{stderr}");
 }
 
@@ -125,6 +139,10 @@ fn pty_flag_with_sudo() {
         .arg(&f.host)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "root\r\n");
 }

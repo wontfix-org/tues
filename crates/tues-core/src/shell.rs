@@ -3,7 +3,8 @@
 use std::borrow::Cow;
 
 fn is_safe(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | '@' | '%' | '+' | ',')
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | '@' | '%' | '+' | ',')
 }
 
 /// Quote a single word for a POSIX shell.

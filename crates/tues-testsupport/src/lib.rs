@@ -146,7 +146,10 @@ async fn start() -> Result<(SshdFixture, Keep), String> {
     let network = format!("tues-test-{suffix}");
     let target_name = format!("tues-target-{suffix}");
     let jump_name = format!("tues-jump-{suffix}");
-    register_cleanup(vec![target_name.clone(), jump_name.clone()], network.clone());
+    register_cleanup(
+        vec![target_name.clone(), jump_name.clone()],
+        network.clone(),
+    );
 
     let base = |name: &str| {
         image
@@ -227,7 +230,10 @@ extern "C" fn cleanup_at_exit() {
 fn register_cleanup(containers: Vec<String>, network: String) {
     if let Ok(mut g) = CLEANUP.lock() {
         let first = g.is_none();
-        *g = Some(Cleanup { containers, network });
+        *g = Some(Cleanup {
+            containers,
+            network,
+        });
         if first {
             // SAFETY: `cleanup_at_exit` is a plain `extern "C"` function that
             // does not unwind and only touches process-global state.

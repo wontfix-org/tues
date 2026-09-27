@@ -189,7 +189,11 @@ impl ConnectOptions {
     pub fn proxy_jump(mut self, spec: impl Into<String>) -> Self {
         let spec = spec.into();
         let list = self.proxy_jump.get_or_insert_with(Vec::new);
-        list.extend(spec.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        list.extend(
+            spec.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
         self
     }
 
@@ -480,7 +484,10 @@ mod tests {
         assert_eq!(r.login_user, "alice");
         assert_eq!(r.host_name, "example.com");
         assert_eq!(r.port, 2222);
-        let r = ConnectOptions::new("[::1]:2200").no_ssh_config().resolve().unwrap();
+        let r = ConnectOptions::new("[::1]:2200")
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
         assert_eq!(r.host_name, "::1");
         assert_eq!(r.port, 2200);
         // Destination beats builder values.
@@ -497,10 +504,17 @@ mod tests {
     #[test]
     fn ipv6_destinations() {
         // Bare address: every colon belongs to the address.
-        let r = ConnectOptions::new("fe80::1").no_ssh_config().resolve().unwrap();
+        let r = ConnectOptions::new("fe80::1")
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
         assert_eq!(r.host_name, "fe80::1");
         assert_eq!(r.port, 22);
-        let r = ConnectOptions::new("2001:db8::1").port(2222).no_ssh_config().resolve().unwrap();
+        let r = ConnectOptions::new("2001:db8::1")
+            .port(2222)
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
         assert_eq!(r.host_name, "2001:db8::1");
         assert_eq!(r.port, 2222);
         // Bracketed with port and user.
@@ -512,18 +526,34 @@ mod tests {
         assert_eq!(r.host_name, "2001:db8::1");
         assert_eq!(r.port, 2200);
         // Bracketed without port.
-        let r = ConnectOptions::new("[::1]").no_ssh_config().resolve().unwrap();
+        let r = ConnectOptions::new("[::1]")
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
         assert_eq!(r.host_name, "::1");
         assert_eq!(r.port, 22);
         // ssh:// URI form.
-        let r = ConnectOptions::new("ssh://bob@[::1]:2022").no_ssh_config().resolve().unwrap();
+        let r = ConnectOptions::new("ssh://bob@[::1]:2022")
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
         assert_eq!(
             (r.login_user.as_str(), r.host_name.as_str(), r.port),
             ("bob", "::1", 2022)
         );
         // Malformed bracket.
-        assert!(ConnectOptions::new("[::1").no_ssh_config().resolve().is_err());
-        assert!(ConnectOptions::new("[::1]:x").no_ssh_config().resolve().is_err());
+        assert!(
+            ConnectOptions::new("[::1")
+                .no_ssh_config()
+                .resolve()
+                .is_err()
+        );
+        assert!(
+            ConnectOptions::new("[::1]:x")
+                .no_ssh_config()
+                .resolve()
+                .is_err()
+        );
         // Jump hosts use the same rules.
         assert_eq!(
             JumpHost::parse("j@[fe80::2]:2201").unwrap(),
@@ -568,7 +598,9 @@ mod tests {
             .unwrap();
         assert!(r.proxy_jump.is_empty());
 
-        let r = ConnectOptions::new("other").resolve_with(Some(&cfg)).unwrap();
+        let r = ConnectOptions::new("other")
+            .resolve_with(Some(&cfg))
+            .unwrap();
         assert_eq!(r.port, 22);
         assert_eq!(r.host_key_policy, HostKeyPolicy::Strict);
     }

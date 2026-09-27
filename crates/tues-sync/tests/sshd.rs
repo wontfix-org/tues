@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use tues_core::{Error, OpenOptions, SudoError, StaticPasswordManager, shared};
+use tues_core::{Error, OpenOptions, StaticPasswordManager, SudoError, shared};
 use tues_sync::Session;
 use tues_testsupport::{PASSWORD, USER, sshd};
 
@@ -54,7 +54,13 @@ fn sudo_conversation_is_hidden_and_stdin_is_gated() {
 #[test]
 fn sudo_with_pty_sync() {
     let s = connect();
-    let out = s.command("id").arg("-un").user("root").pty(true).output().unwrap();
+    let out = s
+        .command("id")
+        .arg("-un")
+        .user("root")
+        .pty(true)
+        .output()
+        .unwrap();
     assert_eq!(out.stdout_lossy(), "root\r\n");
 }
 
@@ -64,7 +70,10 @@ fn sudo_failure_is_reported() {
     o.password_manager = Some(shared(StaticPasswordManager::new("bad")));
     let s = Session::connect(o).unwrap();
     let err = s.command("id").user("root").output().err().unwrap();
-    assert!(matches!(err, Error::Sudo(SudoError::AuthFailed { .. })), "{err}");
+    assert!(
+        matches!(err, Error::Sudo(SudoError::AuthFailed { .. })),
+        "{err}"
+    );
 }
 
 #[test]
@@ -83,14 +92,22 @@ fn wait_timeout_and_signal_from_another_thread() {
     let s = connect();
     let mut child = s.command("sleep").arg("30").spawn().unwrap();
     std::thread::sleep(Duration::from_millis(500));
-    assert!(child.wait_timeout(Duration::from_millis(200)).unwrap().is_none());
+    assert!(
+        child
+            .wait_timeout(Duration::from_millis(200))
+            .unwrap()
+            .is_none()
+    );
     let signaller = child.signaller();
     let killer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
         signaller.signal("TERM").unwrap();
     });
     // Blocks in wait() while the other thread signals.
-    let st = child.wait_timeout(Duration::from_secs(10)).unwrap().expect("exited");
+    let st = child
+        .wait_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("exited");
     assert_eq!(st.signal(), Some("TERM"), "{st:?}");
     killer.join().unwrap();
 }

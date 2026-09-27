@@ -258,7 +258,11 @@ impl Command {
 
     /// Request a pseudo-terminal with default settings (`$TERM`, 80x24).
     pub fn pty(&mut self, enable: bool) -> &mut Self {
-        self.pty = if enable { Some(PtyConfig::default()) } else { None };
+        self.pty = if enable {
+            Some(PtyConfig::default())
+        } else {
+            None
+        };
         self
     }
 
@@ -482,13 +486,19 @@ mod tests {
     fn plain_argv_is_quoted() {
         let mut c = Command::new("echo");
         c.arg("hello world").arg("$X");
-        assert_eq!(c.plan(Stdio::Piped, None).command_line, "echo 'hello world' '$X'");
+        assert_eq!(
+            c.plan(Stdio::Piped, None).command_line,
+            "echo 'hello world' '$X'"
+        );
     }
 
     #[test]
     fn shell_line_goes_through_sh() {
         let c = Command::shell("ls -l | wc -l");
-        assert_eq!(c.plan(Stdio::Piped, None).command_line, "sh -c 'ls -l | wc -l'");
+        assert_eq!(
+            c.plan(Stdio::Piped, None).command_line,
+            "sh -c 'ls -l | wc -l'"
+        );
     }
 
     #[test]
@@ -514,7 +524,9 @@ mod tests {
         let marker = String::from_utf8(sudo.marker.clone()).unwrap();
         assert_eq!(
             plan.command_line,
-            format!("sudo -S -k -p '{prompt}' -u root -- /bin/sh -c 'printf %s '\\''{marker}'\\''; env A=1 id'")
+            format!(
+                "sudo -S -k -p '{prompt}' -u root -- /bin/sh -c 'printf %s '\\''{marker}'\\''; env A=1 id'"
+            )
         );
     }
 
@@ -531,7 +543,10 @@ mod tests {
     fn user_precedence() {
         let c = Command::new("id");
         assert!(c.plan(Stdio::Piped, None).sudo.is_none());
-        assert_eq!(c.plan(Stdio::Piped, Some("root")).sudo.unwrap().user, "root");
+        assert_eq!(
+            c.plan(Stdio::Piped, Some("root")).sudo.unwrap().user,
+            "root"
+        );
         let mut c = Command::new("id");
         c.as_login_user();
         assert!(c.plan(Stdio::Piped, Some("root")).sudo.is_none());

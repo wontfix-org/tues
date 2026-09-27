@@ -316,7 +316,13 @@ fn make_out(kind: Stdio, is_stdout: bool) -> (Sink, Option<PipeReader>) {
     match kind {
         Stdio::Piped => {
             let (tx, rx) = mpsc::channel(PIPE_CHUNKS);
-            (Sink::Pipe(tx), Some(PipeReader { rx, buf: Bytes::new() }))
+            (
+                Sink::Pipe(tx),
+                Some(PipeReader {
+                    rx,
+                    buf: Bytes::new(),
+                }),
+            )
         }
         Stdio::Inherit => (
             if is_stdout {
@@ -386,7 +392,9 @@ pub(crate) fn spawn_child(
     ));
 
     Child {
-        stdin: stdin_tx.map(|tx| ChildStdin { tx: PollSender::new(tx) }),
+        stdin: stdin_tx.map(|tx| ChildStdin {
+            tx: PollSender::new(tx),
+        }),
         stdout: stdout_rx.map(ChildStdout),
         stderr: stderr_rx.map(ChildStderr),
         ctrl: ctrl_tx,

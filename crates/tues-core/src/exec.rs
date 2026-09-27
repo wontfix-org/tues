@@ -333,7 +333,9 @@ mod tests {
         c.stdin(Stdio::Null);
         let mut m = ExecMachine::new(&c.plan(Stdio::Piped, None));
         assert!(matches!(drain(&mut m).as_slice(), [Effect::ChannelEof]));
-        m.handle(Event::Stdout(Bytes::from_static(b"[tues-sudo-x] binary\x00")));
+        m.handle(Event::Stdout(Bytes::from_static(
+            b"[tues-sudo-x] binary\x00",
+        )));
         m.handle(Event::Stderr(Bytes::from_static(b"err")));
         let e = drain(&mut m);
         assert_eq!(stdout_bytes(&e), b"[tues-sudo-x] binary\x00");
@@ -414,14 +416,18 @@ mod tests {
             drain(&mut m);
             m.handle(Event::Stderr(Bytes::from_static(b"Sorry, try again.\n")));
         }
-        m.handle(Event::Stderr(Bytes::from_static(b"sudo: 3 incorrect password attempts\n")));
+        m.handle(Event::Stderr(Bytes::from_static(
+            b"sudo: 3 incorrect password attempts\n",
+        )));
         m.handle(Event::ExitStatus(1));
         m.handle(Event::Eof);
         let e = drain(&mut m);
         assert_eq!(stderr_bytes(&e), b"sudo: 3 incorrect password attempts\n");
         assert!(matches!(
             e.last(),
-            Some(Effect::Finished(Err(Error::Sudo(SudoError::AuthFailed { attempts: 3 }))))
+            Some(Effect::Finished(Err(Error::Sudo(SudoError::AuthFailed {
+                attempts: 3
+            }))))
         ));
     }
 
@@ -447,26 +453,34 @@ mod tests {
         m.handle(Event::PasswordUnavailable(Error::Password("none".into())));
         let e = drain(&mut m);
         assert!(matches!(&e[..], [Effect::ChannelEof]));
-        m.handle(Event::Stderr(Bytes::from_static(b"\nsudo: no password was provided\n")));
+        m.handle(Event::Stderr(Bytes::from_static(
+            b"\nsudo: no password was provided\n",
+        )));
         m.handle(Event::Close);
         let e = drain(&mut m);
         assert!(matches!(
             e.last(),
-            Some(Effect::Finished(Err(Error::Sudo(SudoError::PasswordRequired { .. }))))
+            Some(Effect::Finished(Err(Error::Sudo(
+                SudoError::PasswordRequired { .. }
+            ))))
         ));
     }
 
     #[test]
     fn not_in_sudoers_is_not_started() {
         let mut m = ExecMachine::new(&sudo_plan(false));
-        m.handle(Event::Stderr(Bytes::from_static(b"x is not in the sudoers file.\n")));
+        m.handle(Event::Stderr(Bytes::from_static(
+            b"x is not in the sudoers file.\n",
+        )));
         m.handle(Event::ExitStatus(1));
         m.handle(Event::Eof);
         let e = drain(&mut m);
         assert_eq!(stderr_bytes(&e), b"x is not in the sudoers file.\n");
         assert!(matches!(
             e.last(),
-            Some(Effect::Finished(Err(Error::Sudo(SudoError::NotStarted { exit_status: 1 }))))
+            Some(Effect::Finished(Err(Error::Sudo(SudoError::NotStarted {
+                exit_status: 1
+            }))))
         ));
     }
 

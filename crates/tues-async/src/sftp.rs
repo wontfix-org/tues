@@ -104,7 +104,11 @@ impl Sftp {
 
     /// Create (truncate) for writing.
     pub async fn create(&self, path: impl Into<String>) -> Result<File> {
-        self.inner.create(path).await.map(File::new).map_err(map_err)
+        self.inner
+            .create(path)
+            .await
+            .map(File::new)
+            .map_err(map_err)
     }
 
     /// Open with explicit options.
