@@ -1099,9 +1099,151 @@ where
 
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Parser};
+    use std::collections::HashMap;
 
-    use super::FileSpec;
+    use clap::{CommandFactory, Parser};
+    use tues_core::{
+        Error, ExitStatus, HostKeyPolicy, PasswordKind, PasswordManager, PasswordPrompter,
+        PasswordRequest, SecretString,
+    };
+
+    use super::{FileSpec, FleetPasswordManager, HostKeyCheck};
+
+    #[test]
+    fn host_key_check_maps_onto_the_core_policy() {
+        assert_eq!(
+            HostKeyPolicy::from(HostKeyCheck::Strict),
+            HostKeyPolicy::Strict
+        );
+        assert_eq!(
+            HostKeyPolicy::from(HostKeyCheck::AcceptNew),
+            HostKeyPolicy::AcceptNew
+        );
+        assert_eq!(HostKeyPolicy::from(HostKeyCheck::Off), HostKeyPolicy::Off);
+    }
+
+    /// Answers `<login user>-<n>` for the n-th prompt.
+    struct CountingPrompter {
+        prompts: usize,
+    }
+
+    impl PasswordPrompter for CountingPrompter {
+        fn prompt(&mut self, req: &PasswordRequest) -> tues_core::Result<SecretString> {
+            self.prompts += 1;
+            Ok(SecretString::from(format!(
+                "{}-{}",
+                req.login_user, self.prompts
+            )))
+        }
+    }
+
+    fn reveal(pw: &SecretString) -> &str {
+        use tues_core::ExposeSecret;
+        pw.expose_secret()
+    }
+
+    #[test]
+    fn fleet_password_manager_prompts_once_per_login_user_until_invalidated() {
+        let mut pm = FleetPasswordManager {
+            prompter: CountingPrompter { prompts: 0 },
+            cache: HashMap::new(),
+        };
+        let login = PasswordRequest::login("a.example", 22, "alice");
+        let sudo = PasswordRequest {
+            kind: PasswordKind::Sudo,
+            host: "b.example".into(),
+            user: Some("root".into()),
+            ..login.clone()
+        };
+        // A sudo prompt reuses the login password of the same user, on any host.
+        assert_eq!(reveal(&pm.get(&login).unwrap()), "alice-1");
+        assert_eq!(reveal(&pm.get(&sudo).unwrap()), "alice-1");
+        assert_eq!(pm.prompter.prompts, 1);
+
+        // Another login user is a different credential.
+        let other = PasswordRequest::login("a.example", 22, "bob");
+        assert_eq!(reveal(&pm.get(&other).unwrap()), "bob-2");
+
+        // Rejected on one host: prompt again for everyone.
+        pm.invalidate(&sudo);
+        assert_eq!(reveal(&pm.get(&login).unwrap()), "alice-3");
+        assert_eq!(reveal(&pm.get(&other).unwrap()), "bob-2");
+
+        // Key passphrases are cached per key file.
+        let key_a = PasswordRequest {
+            kind: PasswordKind::KeyPassphrase,
+            key_path: Some("/k/a".into()),
+            ..login.clone()
+        };
+        let key_b = PasswordRequest {
+            key_path: Some("/k/b".into()),
+            ..key_a.clone()
+        };
+        assert_eq!(reveal(&pm.get(&key_a).unwrap()), "alice-4");
+        assert_eq!(reveal(&pm.get(&key_b).unwrap()), "alice-5");
+        assert_eq!(reveal(&pm.get(&key_a).unwrap()), "alice-4");
+    }
+
+    #[test]
+    fn note_failure_sets_the_exit_code_by_outcome_and_host_count() {
+        let mut code = 0;
+        assert!(!super::note_failure(
+            "h",
+            &Ok(ExitStatus::from_code(0)),
+            false,
+            0,
+            &mut code
+        ));
+        assert_eq!(code, 0);
+
+        // Alone, the host's own exit code is passed through.
+        assert!(super::note_failure(
+            "h",
+            &Ok(ExitStatus::from_code(7)),
+            false,
+            0,
+            &mut code
+        ));
+        assert_eq!(code, 7);
+        assert!(super::note_failure(
+            "h",
+            &Ok(ExitStatus::from_signal("TERM")),
+            false,
+            0,
+            &mut code
+        ));
+        assert_eq!(code, 1);
+        assert!(super::note_failure(
+            "h",
+            &Err(Error::Other("boom".into())),
+            false,
+            0,
+            &mut code
+        ));
+        assert_eq!(code, 255);
+
+        // Among several hosts any failure is 1, quietly unless verbose.
+        for verbose in [0, 1] {
+            code = 0;
+            assert!(super::note_failure(
+                "h",
+                &Ok(ExitStatus::from_code(7)),
+                true,
+                verbose,
+                &mut code
+            ));
+            assert_eq!(code, 1);
+        }
+        code = 0;
+        assert!(super::note_failure(
+            "h",
+            &Err(Error::Other("boom".into())),
+            true,
+            0,
+            &mut code
+        ));
+        assert_eq!(code, 1);
+    }
 
     #[test]
     fn help_option_text_is_at_most_120_columns() {
@@ -1250,6 +1392,9 @@ mod tests {
             Some(bin.as_path())
         );
         assert!(super::find_executable(path, "tues-provider-missing").is_none());
+        // A directory with the right name is not a provider.
+        std::fs::create_dir(dir.join("tues-provider-dir")).unwrap();
+        assert!(super::find_executable(path, "tues-provider-dir").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1265,6 +1410,105 @@ mod tests {
 
         assert!(super::split_script_spec("my-script 'unterminated").is_err());
         assert!(super::split_script_spec("   ").is_err());
+        assert!(super::split_script_spec("''").is_err());
+    }
+
+    #[test]
+    fn script_spec_backslashes_follow_shell_rules() {
+        // Outside quotes a backslash escapes anything; inside double quotes
+        // only the shell's special characters, otherwise it is kept.
+        let words = super::split_words(r#"a\ b "c\$d\"e\\f\qg" 'h\i' "j'k""#).unwrap();
+        assert_eq!(words, ["a b", r#"c$d"e\f\qg"#, r"h\i", "j'k"]);
+        assert_eq!(super::split_words("\"a\\\nb\"").unwrap(), ["a\nb"]);
+        assert_eq!(super::split_words("a\tb\r\nc").unwrap(), ["a", "b", "c"]);
+        assert_eq!(super::split_words("\"\" x").unwrap(), ["", "x"]);
+        assert!(super::split_words("a\\").is_err());
+        assert!(super::split_words("\"a\\").is_err());
+        assert!(super::split_words("\"open").is_err());
+    }
+
+    #[test]
+    fn script_with_a_path_is_used_directly() {
+        let dir = std::env::temp_dir().join(format!("tues-script-direct-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("tool");
+        std::fs::write(&script, b"#!/bin/sh\n").unwrap();
+        let spec = script.to_str().unwrap();
+        assert_eq!(super::lookup_script(spec).unwrap(), script);
+
+        let resolved = super::resolve_script(&format!("{spec} arg")).unwrap();
+        assert_eq!(resolved.file.src, script);
+        assert_eq!(resolved.file.name, "tool");
+        assert!(resolved.file.is_temporary());
+        assert_eq!(resolved.command, "chmod u+x ./tool && ./tool arg");
+        assert_eq!(resolved.defaults, super::ScriptDefaults::default());
+
+        let missing = dir.join("missing");
+        let err = super::lookup_script(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().ends_with("missing: not a file"), "{err}");
+        let err = super::lookup_script(dir.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("not a file"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tues_args_values_are_type_checked() {
+        fn err(json: &str) -> String {
+            super::parse_tues_args(json).unwrap_err().to_string()
+        }
+        assert!(err("[]").contains("must be a JSON object"));
+        assert!(err("nope").contains("invalid tues-args JSON"));
+        assert!(err("{\"user\": 1}").contains("user must be a string"));
+        assert!(err("{\"user\": \"\"}").contains("user must not be empty"));
+        assert!(err("{\"pty\": \"yes\"}").contains("pty must be a boolean"));
+        assert!(err("{\"prefix\": 0}").contains("prefix must be a boolean"));
+        assert!(err("{\"nope\": true}").contains("unknown tues-args key: nope"));
+        assert_eq!(
+            super::parse_tues_args("{}").unwrap(),
+            super::ScriptDefaults::default()
+        );
+    }
+
+    #[test]
+    fn script_header_stops_at_a_blank_line_or_code() {
+        // No header at all.
+        assert_eq!(super::header_json("echo hi\n").unwrap(), None);
+        assert_eq!(super::header_json("").unwrap(), None);
+        // Blank lines before the first comment do not end the block.
+        let leading = "\n\n# tues-args = {\"pty\": true}\n";
+        assert_eq!(
+            super::header_json(leading).unwrap(),
+            Some("{\"pty\": true}")
+        );
+        // A BOM and a comment marker with nothing after it are fine.
+        assert_eq!(super::comment_body("   #"), Some(""));
+        assert_eq!(super::comment_body("code # not a comment"), None);
+        assert_eq!(super::tues_args_value("tues-args"), None);
+        assert_eq!(super::tues_args_value("tues-args-x = {}"), None);
+        assert_eq!(super::tues_args_value("  tues-args={ }  "), Some("{ }"));
+    }
+
+    #[test]
+    fn script_defaults_reject_a_non_utf8_header() {
+        let dir = std::env::temp_dir().join(format!("tues-script-utf8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("latin1");
+        std::fs::write(&path, b"# caf\xe9\n").unwrap();
+        let err = super::load_script_defaults(&path).unwrap_err();
+        assert!(err.to_string().contains("not utf-8"), "{err}");
+
+        let bom = dir.join("bom");
+        std::fs::write(&bom, "\u{feff}# tues-args = {\"prefix\": false}\n").unwrap();
+        assert_eq!(
+            super::load_script_defaults(&bom).unwrap().prefix,
+            Some(false)
+        );
+
+        let err = super::load_script_defaults(&dir.join("absent")).unwrap_err();
+        assert!(err.to_string().contains("reading"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

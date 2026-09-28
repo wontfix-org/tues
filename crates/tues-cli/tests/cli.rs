@@ -171,6 +171,9 @@ fn file_uploads_are_temporary_unless_mapped() {
     std::fs::write(dir.join("a:b"), b"colon").unwrap();
     std::fs::write(dir.join("kept"), b"kept").unwrap();
     let kept = format!("/tmp/tues-cli-kept-{id}");
+    // Mapped onto an existing directory: lands inside it, like `cp`.
+    let into_dir = format!("tues-cli-into-dir-{id}");
+    std::fs::write(dir.join(&into_dir), b"indir").unwrap();
 
     let out = tues()
         .arg("--no-pty")
@@ -180,7 +183,11 @@ fn file_uploads_are_temporary_unless_mapped() {
         .arg(dir.join("a\\:b"))
         .arg("--file")
         .arg(format!("{}:{kept}", dir.join("kept").display()))
-        .arg(format!("cat tree/sub/x.txt a:b {kept}; pwd"))
+        .arg("--file")
+        .arg(format!("{}:/tmp/", dir.join(&into_dir).display()))
+        .arg(format!(
+            "cat tree/sub/x.txt a:b {kept} /tmp/{into_dir}; pwd"
+        ))
         .arg("cl")
         .arg(&f.host)
         .output()
@@ -192,14 +199,14 @@ fn file_uploads_are_temporary_unless_mapped() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("treecolonkept/home/{USER}\n")
+        format!("treecolonkeptindir/home/{USER}\n")
     );
 
-    // Temporary uploads are gone; the mapped one stays.
+    // Temporary uploads are gone; the mapped ones stay.
     let out = tues()
         .arg("--no-pty")
         .arg(format!(
-            "test ! -e tree && test ! -e a:b && cat {kept} && rm {kept}"
+            "test ! -e tree && test ! -e a:b && cat {kept} && rm {kept} /tmp/{into_dir}"
         ))
         .arg("cl")
         .arg(&f.host)
@@ -211,6 +218,170 @@ fn file_uploads_are_temporary_unless_mapped() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "kept");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn removing_a_temporary_upload_yourself_is_only_a_warning() {
+    let f = sshd();
+    let id = std::process::id();
+    let dir = std::env::temp_dir().join(format!("tues-cli-selfrm-{id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let name = format!("tues-cli-selfrm-{id}.txt");
+    std::fs::write(dir.join(&name), b"x").unwrap();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--file")
+        .arg(dir.join(&name))
+        .arg(format!("rm {name} && echo gone"))
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "gone\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("{}: warning: could not remove {name}", f.host)),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prefixed_output_completes_partial_last_lines() {
+    let f = sshd();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("-j")
+        .arg("2")
+        .arg("printf 'a\\nb'; printf 'e' >&2")
+        .arg("cl")
+        .arg(&f.host)
+        .arg(format!("{}:{}", f.host, f.port))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines: Vec<&str> = stdout.lines().collect();
+    lines.sort();
+    let second = format!("{}:{}", f.host, f.port);
+    assert_eq!(
+        lines,
+        vec![
+            format!("{}: a", f.host),
+            format!("{}: b", f.host),
+            format!("{second}: a"),
+            format!("{second}: b"),
+        ]
+    );
+    assert!(stdout.ends_with('\n'), "{stdout:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut lines: Vec<&str> = stderr.lines().collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        vec![format!("{}: e", f.host), format!("{second}: e")]
+    );
+}
+
+#[test]
+fn verbose_reports_the_status_of_each_failed_host() {
+    let f = sshd();
+    let out = tues()
+        .arg("-v")
+        .arg("exit 4")
+        .arg("cl")
+        .arg(&f.host)
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|l| *l == format!("{}: exit status: 4", f.host))
+            .count(),
+        2,
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ssh_config_file_and_known_hosts_options_reach_the_connection() {
+    let f = sshd();
+    let id = std::process::id();
+    let dir = std::env::temp_dir().join(format!("tues-cli-cfg-{id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let alias = format!("tues-cfg-alias-{id}");
+    let config = dir.join("ssh_config");
+    std::fs::write(
+        &config,
+        format!(
+            "Host {alias}\n  HostName {}\n  Port {}\n  User {}\n  IdentityFile {}\n  IdentitiesOnly yes\n",
+            f.host,
+            f.port,
+            USER,
+            f.key_path.display()
+        ),
+    )
+    .unwrap();
+    let known_hosts = dir.join("known_hosts");
+
+    let run = |policy: &str, kh: &std::path::Path| {
+        tues_bin()
+            .env("TUES_PW", PASSWORD)
+            .arg("-F")
+            .arg(&config)
+            .arg("--known-hosts")
+            .arg(kh)
+            .arg("--host-key-check")
+            .arg(policy)
+            .arg("--no-pty")
+            .arg("echo via-config")
+            .arg("cl")
+            .arg(&alias)
+            .output()
+            .unwrap()
+    };
+
+    // Unknown key: strict refuses, accept-new learns it, then strict is happy.
+    let out = run("strict", &known_hosts);
+    assert_eq!(out.status.code(), Some(255));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(&format!("{alias}: error:")), "{stderr}");
+
+    let out = run("accept-new", &known_hosts);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "via-config\n");
+    let learned = std::fs::read_to_string(&known_hosts).unwrap();
+    assert!(
+        learned.contains(&format!("[{}]:{}", f.host, f.port)),
+        "{learned}"
+    );
+
+    let out = run("strict", &known_hosts);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "via-config\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -432,6 +603,95 @@ fn external_provider_supplies_hosts_and_receives_its_options() {
         "{stderr}"
     );
     assert_eq!(std::fs::read_to_string(&log).unwrap(), "--site\nnyc\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn empty_host_lists_are_errors() {
+    for args in [
+        vec!["true", "cl"],
+        vec!["true", "cl", "", ""],
+        vec!["-v", "true", "cl"],
+        vec!["-vv", "true", "cl"],
+        vec!["-vvv", "true", "cl"],
+    ] {
+        let out = tues_bin().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("Error: no hosts"), "{args:?}: {stderr}");
+    }
+
+    let out = tues_bin().arg("true").arg("file").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("file provider requires at least one file"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn tues_pw_must_be_unicode() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let out = tues_bin()
+        .env("TUES_PW", std::ffi::OsStr::from_bytes(b"\xff\xfe"))
+        .arg("true")
+        .arg("cl")
+        .arg("h")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("TUES_PW is not valid Unicode"), "{stderr}");
+}
+
+#[test]
+fn external_provider_output_is_validated() {
+    let dir = std::env::temp_dir().join(format!("tues-cli-provider-odd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_provider(&dir, "empty", "#!/bin/sh\nprintf '\\n  \\n'\n");
+    write_provider(&dir, "binary", "#!/bin/sh\nprintf 'h\\377\\n'\n");
+    write_provider(&dir, "killed", "#!/bin/sh\nkill -9 $$\n");
+
+    let out = tues_bin()
+        .env("PATH", path_with(&dir))
+        .arg("true")
+        .arg("empty")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tues-provider-empty produced no hosts"),
+        "{stderr}"
+    );
+
+    let out = tues_bin()
+        .env("PATH", path_with(&dir))
+        .arg("true")
+        .arg("binary")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tues-provider-binary wrote hosts that are not utf-8"),
+        "{stderr}"
+    );
+
+    let out = tues_bin()
+        .env("PATH", path_with(&dir))
+        .arg("true")
+        .arg("killed")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tues-provider-killed was terminated by a signal"),
+        "{stderr}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

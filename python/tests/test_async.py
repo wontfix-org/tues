@@ -23,6 +23,7 @@ def test_run_and_properties(sshd):
         async with await connect(sshd) as s:
             assert isinstance(s, tues.AsyncSession)
             assert s.login_user == USER and s.port == sshd.port and not s.closed
+            assert s.host == sshd.host and s.user is None
             assert repr(s) == f"AsyncSession({USER}@{sshd.host}:{sshd.port})"
             out = await s.run("echo hello; exit 2", shell=True, capture_output=True)
             assert isinstance(out, tues.CompletedProcess)
@@ -41,6 +42,42 @@ def test_run_and_properties(sshd):
             assert isinstance(ei.value, subprocess.CalledProcessError)
             assert ei.value.cmd == ["false"] and ei.value.returncode == 1
         assert s.closed
+
+    run(main())
+
+
+def test_session_default_user(sshd):
+    async def main():
+        async with await connect(sshd, user="root") as s:
+            assert s.user == "root"
+            out = await s.run(["id", "-un"], capture_output=True, check=True)
+            assert out.stdout == b"root\n"
+
+    run(main())
+
+
+def test_raw_child_streams(sshd):
+    """The `tues._tues.AsyncChild` layer under `tues.Process`."""
+    from tues._tues import AsyncSession as RawAsyncSession
+
+    async def main():
+        raw = await RawAsyncSession.connect(f"{USER}@{sshd.host}", **sshd.connect_kwargs())
+        child = await raw.spawn(["cat"], stdin=tues.PIPE, stdout=tues.PIPE, stderr=tues.DEVNULL)
+        assert repr(child) == "AsyncChild(...)"
+        assert child.stderr is None
+        assert child.returncode is None and child.poll() is None
+        assert not child.stdin.closed
+        assert await child.stdin.write(b"abc") == 3
+        assert await child.stdout.read(2) == b"ab"
+        await child.stdin.close()
+        await child.stdin.close()  # idempotent
+        assert child.stdin.closed
+        with pytest.raises(ValueError, match="closed stdin"):
+            await child.stdin.write(b"x")
+        assert await child.stdout.read() == b"c"
+        assert await child.wait() == 0
+        assert child.poll() == 0 and child.returncode == 0
+        await raw.close()
 
     run(main())
 
@@ -180,9 +217,12 @@ def test_session_files(sshd, tmp_path):
             assert dest.read_bytes() == b"hi"
             explicit = await s.sftp()
             await explicit.close()
-            await s.delete(remote)
+            renamed = remote + ".2"
+            await s.rename(remote, renamed)
+            assert (await s.stat(renamed)).is_file
+            await s.delete(renamed)
             with pytest.raises(tues.SftpError):
-                await s.stat(remote)
+                await s.stat(renamed)
 
     run(main())
 
@@ -201,12 +241,31 @@ def test_sftp(sshd):
                     assert await f.read() == b"yz"
                     await f.seek(0, 2)
                     assert await f.write(b"!") == 1
+                    await f.flush()
                 assert f.closed
+                with pytest.raises(ValueError, match="closed file"):
+                    await f.read()
+                f = await sftp.open(path)
+                assert not f.closed
+                assert await f.read(2) == b"xy"
+                assert await f.read(10) == b"z!"  # short read at EOF
+                assert await f.read(2) == b""
+                await f.close()
+                await f.close()  # idempotent
+                assert f.closed
+                with pytest.raises(ValueError, match="closed file"):
+                    await f.write(b"x")
                 assert (await sftp.stat(path)).size == 4
                 assert any(e.name == "pytest-async.txt" for e in await sftp.listdir("/tmp"))
                 await sftp.mkdir("/tmp/pytest-adir")
                 assert (await sftp.stat("/tmp/pytest-adir")).is_dir
                 await sftp.rmdir("/tmp/pytest-adir")
+                await sftp.symlink(path, path + ".lnk")
+                assert await sftp.readlink(path + ".lnk") == path
+                assert (await sftp.lstat(path + ".lnk")).is_symlink
+                assert not (await sftp.stat(path + ".lnk")).is_symlink
+                assert await sftp.realpath(path + ".lnk") == path
+                await sftp.remove(path + ".lnk")
                 await sftp.rename(path, path + ".2")
                 assert not await sftp.exists(path)
                 await sftp.remove(path + ".2")

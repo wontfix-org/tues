@@ -115,6 +115,43 @@ fn wait_timeout_and_signal_from_another_thread() {
 }
 
 #[test]
+fn child_handles_debug_flush_id_and_signal_by_name() {
+    let s = connect();
+    let mut child = s
+        .command("sh")
+        .arg("-c")
+        .arg("cat; echo done >&2")
+        .stderr(Stdio::Piped)
+        .spawn()
+        .unwrap();
+    assert!(child.id().is_none());
+    assert!(format!("{child:?}").contains("Child"));
+    assert_eq!(format!("{:?}", child.stdin.as_ref().unwrap()), "ChildStdin");
+    assert_eq!(
+        format!("{:?}", child.stdout.as_ref().unwrap()),
+        "ChildStdout"
+    );
+    assert_eq!(
+        format!("{:?}", child.stderr.as_ref().unwrap()),
+        "ChildStderr"
+    );
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"ping").unwrap();
+    stdin.flush().unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"ping");
+    assert_eq!(out.stderr, b"done\n");
+
+    let mut child = s.command("sleep").arg("30").spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    child.signal("TERM").unwrap();
+    let st = child.wait().unwrap();
+    assert_eq!(st.signal(), Some("TERM"), "{st:?}");
+}
+
+#[test]
 fn session_file_helpers() {
     let s = connect();
     let id = std::process::id();
