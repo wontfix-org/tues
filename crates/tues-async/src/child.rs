@@ -336,6 +336,109 @@ fn make_out(kind: Stdio, is_stdout: bool) -> (Sink, Option<PipeReader>) {
     }
 }
 
+/// Spawn a reader for process stdin. The `PipeWriter` wakes that reader when dropped.
+#[cfg(unix)]
+fn inherited_stdin() -> (
+    Option<mpsc::Sender<Bytes>>,
+    Option<mpsc::Receiver<Bytes>>,
+    Option<std::io::PipeWriter>,
+) {
+    let (tx, rx) = mpsc::channel::<Bytes>(PIPE_CHUNKS);
+    let (wake_read, wake_write) = std::io::pipe().expect("inherited stdin wake pipe");
+    tokio::task::spawn_blocking(move || forward_inherited_stdin(tx, wake_read));
+    (None, Some(rx), Some(wake_write))
+}
+
+/// Copy process stdin to `tx` until EOF or until `wake` is closed.
+///
+/// Waits in `poll(2)` and only then calls `read(2)`. A blocking read on a
+/// terminal cannot be cancelled, and dropping a `Runtime` waits for
+/// `spawn_blocking` tasks, so the read must be interruptible or shutdown
+/// sits until the next keypress. Closing `wake` (the pump task ending, or
+/// runtime shutdown aborting it) makes `poll` return.
+#[cfg(unix)]
+fn forward_inherited_stdin(tx: mpsc::Sender<Bytes>, wake: std::io::PipeReader) {
+    use std::io::Read;
+
+    let mut buf = vec![0u8; 32 * 1024];
+    while let Ok(true) = poll_inherited_stdin(&wake) {
+        match std::io::stdin().lock().read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if tx.blocking_send(Bytes::copy_from_slice(&buf[..n])).is_err() {
+                    break;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+/// `Ok(true)` when stdin has bytes to read. `Ok(false)` when the wake pipe closed.
+#[cfg(unix)]
+fn poll_inherited_stdin(wake: &std::io::PipeReader) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let mut fds = [
+        libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    loop {
+        // SAFETY: `fds` is a live two-element array for this call, and `wake`
+        // keeps its fd open for the whole poll.
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+        if fds[1].revents != 0 {
+            return Ok(false);
+        }
+        if (fds[0].revents & libc::POLLIN) != 0 {
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+}
+
+/// Copy process stdin until EOF. Targets without `poll(2)` cannot interrupt
+/// that read, so runtime shutdown waits until stdin reaches EOF.
+#[cfg(not(unix))]
+fn inherited_stdin() -> (
+    Option<mpsc::Sender<Bytes>>,
+    Option<mpsc::Receiver<Bytes>>,
+    Option<std::io::PipeWriter>,
+) {
+    let (tx, rx) = mpsc::channel::<Bytes>(PIPE_CHUNKS);
+    tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            match stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    (None, Some(rx), None)
+}
+
 /// Start the pump task for an exec'd channel and hand back the child handle.
 pub(crate) fn spawn_child(
     channel: Channel<Msg>,
@@ -345,32 +448,13 @@ pub(crate) fn spawn_child(
 ) -> Child {
     let machine = ExecMachine::new(&plan);
 
-    let (stdin_tx, stdin_rx) = match plan.stdin {
+    let (stdin_tx, stdin_rx, stdin_wake) = match plan.stdin {
         Stdio::Piped => {
             let (tx, rx) = mpsc::channel::<Bytes>(PIPE_CHUNKS);
-            (Some(tx), Some(rx))
+            (Some(tx), Some(rx), None)
         }
-        Stdio::Inherit => {
-            let (tx, rx) = mpsc::channel::<Bytes>(PIPE_CHUNKS);
-            // Forward local stdin. This occupies a blocking thread until the
-            // local stdin hits EOF.
-            tokio::spawn(async move {
-                let mut stdin = tokio::io::stdin();
-                let mut buf = vec![0u8; 32 * 1024];
-                loop {
-                    match stdin.read(&mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            if tx.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-            (None, Some(rx))
-        }
-        Stdio::Null => (None, None),
+        Stdio::Inherit => inherited_stdin(),
+        Stdio::Null => (None, None, None),
     };
     let (stdout_sink, stdout_rx) = make_out(plan.stdout, true);
     let (stderr_sink, stderr_rx) = make_out(plan.stderr, false);
@@ -382,6 +466,7 @@ pub(crate) fn spawn_child(
         machine,
         PumpIo {
             stdin_rx,
+            stdin_wake,
             stdout: stdout_sink,
             stderr: stderr_sink,
             ctrl_rx,
@@ -405,6 +490,10 @@ pub(crate) fn spawn_child(
 
 struct PumpIo {
     stdin_rx: Option<mpsc::Receiver<Bytes>>,
+    /// Write end of the pipe that wakes the inherited-stdin reader. Dropping
+    /// it (task completion, or abort during runtime shutdown) makes that
+    /// reader return so `Runtime` drop does not wait on the terminal.
+    stdin_wake: Option<std::io::PipeWriter>,
     stdout: Sink,
     stderr: Sink,
     ctrl_rx: mpsc::UnboundedReceiver<Ctrl>,
@@ -459,6 +548,9 @@ async fn pump(
                     }));
                 }
                 Effect::Finished(result) => {
+                    // Unblock the inherited-stdin reader before waiting on the
+                    // channel close, so runtime shutdown is not stuck in read.
+                    drop(io.stdin_wake.take());
                     let result = match result {
                         Err(Error::Protocol(_)) if killed => Ok(ExitStatus::from_signal("KILL")),
                         r => r,
