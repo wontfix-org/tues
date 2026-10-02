@@ -10,7 +10,7 @@
 //! blocks are skipped.
 //!
 //! Resolution follows OpenSSH: the first obtained value for a key wins,
-//! except `IdentityFile`, which accumulates.
+//! except `IdentityFile` and `SetEnv`, which accumulate.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
