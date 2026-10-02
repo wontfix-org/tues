@@ -1,7 +1,7 @@
 //! `tues` — run a command on many hosts over SSH, optionally via sudo.
 //!
 //! ```text
-//! tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
+//! tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
 //! ```
 //!
 //! The provider decides which hosts to connect to. `cl` takes them as
@@ -12,7 +12,9 @@
 //!
 //! `--script` replaces the remote command. The script is found on `TUES_PATH`,
 //! uploaded, run, and removed. A text script can set `user`, `pty`, and
-//! `prefix` defaults in a `tues-args` line in its top comment block.
+//! `prefix` defaults in a `tues-args` line in its top comment block, and can
+//! name the hosts with `tues-provider` and `tues-provider-args` when the
+//! command line does not.
 //!
 //! [`run`] is the whole program: the `tues` binary calls it with its
 //! arguments, and the Python extension exposes it as `tues._tues.cli_main`.
@@ -60,7 +62,7 @@ impl From<HostKeyCheck> for HostKeyPolicy {
     version,
     about,
     long_about = None,
-    override_usage = "tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...",
+    override_usage = "tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]",
     max_term_width = 120,
     after_help = "\
 Providers:
@@ -70,6 +72,9 @@ Providers:
 
 tues options come before the command. Arguments and options after the provider
 name are passed through to that provider.
+
+A --script file may set the provider in its header (tues-provider and
+tues-provider-args). A provider on the command line overrides that header.
 
 When TUES_PW is set, tues uses it for login and sudo passwords instead of prompting."
 )]
@@ -157,6 +162,9 @@ struct Cli {
     /// A text script may set defaults in its top comment block:
     /// `# tues-args = {"user": "root", "pty": false, "prefix": true}`.
     /// `--user`, `--pty` / `--no-pty`, and `--no-prefix` override those.
+    /// `# tues-provider = "cl"` and `# tues-provider-args = ["web01"]` name
+    /// the hosts when the command line does not. A provider after `--script`
+    /// overrides both lines.
     #[arg(short = 's', long, value_name = "SPEC")]
     script: Option<String>,
 
@@ -178,11 +186,10 @@ struct Cli {
     /// are newline-separated host files, `-` for stdin), or a name resolved as
     /// the executable `tues-provider-<name>` on `PATH`.
     #[arg(
-        required = true,
         trailing_var_arg = true,
         allow_hyphen_values = true,
         value_name = "COMMAND PROVIDER [ARGS]...",
-        num_args = 1..
+        num_args = 0..
     )]
     args: Vec<String>,
 }
@@ -245,12 +252,16 @@ struct Run {
     prefix: Option<bool>,
 }
 
-/// Defaults read from a script's `tues-args` header.
+/// Defaults read from a script header: `tues-args`, `tues-provider`, and
+/// `tues-provider-args`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ScriptDefaults {
     user: Option<String>,
     pty: Option<bool>,
     prefix: Option<bool>,
+    provider: Option<String>,
+    /// Absent when the header has no `tues-provider-args` line.
+    provider_args: Option<Vec<String>>,
 }
 
 /// Prompts once per (kind, login user) and reuses the answer across hosts, since a
@@ -392,8 +403,8 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     if cli.fail_fast() && jobs != 1 {
         anyhow::bail!("--check only works with one job at a time");
     }
-    let run = prepare_run(&cli)?;
-    let mut hosts = resolve_hosts(&cli)?;
+    let (run, defaults) = prepare_run(&cli)?;
+    let mut hosts = resolve_hosts(&cli, defaults.as_ref())?;
     if cli.sort_hosts {
         hosts.sort();
     }
@@ -507,13 +518,16 @@ impl Cli {
 }
 
 /// Hosts from the provider named after the command (or after `--script`).
-fn resolve_hosts(cli: &Cli) -> anyhow::Result<Vec<String>> {
-    let (provider, pargs) = provider_args(cli)?;
-    let hosts = match provider {
+///
+/// A command-line provider replaces a `tues-provider` line in the script.
+/// With `--script` and no command-line provider, that line is used instead.
+fn resolve_hosts(cli: &Cli, defaults: Option<&ScriptDefaults>) -> anyhow::Result<Vec<String>> {
+    let (provider, pargs) = selected_provider(cli, defaults)?;
+    let hosts = match provider.as_str() {
         "cl" => pargs.iter().filter(|h| !h.is_empty()).cloned().collect(),
-        "file" => hosts_from_files(pargs)?,
+        "file" => hosts_from_files(&pargs)?,
         name => {
-            let hosts = hosts_from_program(name, pargs)?;
+            let hosts = hosts_from_program(name, &pargs)?;
             if hosts.is_empty() {
                 anyhow::bail!("tues-provider-{name} produced no hosts");
             }
@@ -654,50 +668,66 @@ fn connect_options(
     o
 }
 
-/// Provider token and the arguments that belong to it.
-///
-/// With `--script` the remote command is not a positional, so the provider is
-/// the first one.
-fn provider_args(cli: &Cli) -> anyhow::Result<(&str, &[String])> {
-    let (provider_at, missing) = if cli.script.is_some() {
-        (
-            0,
-            "a provider is required after --script (`cl`, `file`, or a name)",
-        )
-    } else {
-        (
-            1,
-            "a provider is required after the command (`cl`, `file`, or a name)",
-        )
-    };
-    let Some(provider) = cli.args.get(provider_at).map(String::as_str) else {
-        anyhow::bail!("{missing}");
-    };
-    Ok((provider, cli.args.get(provider_at + 1..).unwrap_or(&[])))
+/// Command-line provider, or the script header when `--script` omits one.
+fn selected_provider(
+    cli: &Cli,
+    defaults: Option<&ScriptDefaults>,
+) -> anyhow::Result<(String, Vec<String>)> {
+    if let Some((name, args)) = positional_provider(cli) {
+        return Ok((name.to_string(), args.to_vec()));
+    }
+    if cli.script.is_some() {
+        if let Some(name) = defaults.and_then(|d| d.provider.clone()) {
+            let args = defaults
+                .and_then(|d| d.provider_args.clone())
+                .unwrap_or_default();
+            return Ok((name, args));
+        }
+        anyhow::bail!(
+            "a provider is required after --script (`cl`, `file`, or a name), or set tues-provider in the script header"
+        );
+    }
+    anyhow::bail!("a provider is required after the command (`cl`, `file`, or a name)");
 }
 
-fn prepare_run(cli: &Cli) -> anyhow::Result<Run> {
+/// Provider token and the arguments that belong to it, when the command line
+/// has one. With `--script` the remote command is not a positional, so the
+/// provider is the first one.
+fn positional_provider(cli: &Cli) -> Option<(&str, &[String])> {
+    let provider_at = if cli.script.is_some() { 0 } else { 1 };
+    let name = cli.args.get(provider_at)?;
+    Some((name, cli.args.get(provider_at + 1..).unwrap_or(&[])))
+}
+
+fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
     let Some(spec) = cli.script.as_deref() else {
         let Some(command) = cli.args.first() else {
             anyhow::bail!("a command is required");
         };
-        return Ok(Run {
-            command: command.clone(),
-            script: None,
-            user: cli.user.clone(),
-            pty: cli.use_pty(),
-            prefix: cli.no_prefix.then_some(false),
-        });
+        return Ok((
+            Run {
+                command: command.clone(),
+                script: None,
+                user: cli.user.clone(),
+                pty: cli.use_pty(),
+                prefix: cli.no_prefix.then_some(false),
+            },
+            None,
+        ));
     };
     let resolved = resolve_script(spec)?;
     let (user, pty, prefix) = effective_settings(cli, &resolved.defaults);
-    Ok(Run {
-        command: resolved.command,
-        script: Some(resolved.file),
-        user,
-        pty,
-        prefix,
-    })
+    let defaults = resolved.defaults;
+    Ok((
+        Run {
+            command: resolved.command,
+            script: Some(resolved.file),
+            user,
+            pty,
+            prefix,
+        },
+        Some(defaults),
+    ))
 }
 
 /// Command-line flags win. Unset flags keep the script header, and unset
@@ -881,26 +911,65 @@ fn load_script_defaults(path: &Path) -> anyhow::Result<ScriptDefaults> {
     let text = std::str::from_utf8(&buf)
         .with_context(|| format!("{}: script header is not utf-8", path.display()))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    match header_json(text)? {
+    let header = header_directives(text)?;
+    let mut defaults = match header.args {
         Some(json) => {
-            parse_tues_args(json).with_context(|| format!("{}: tues-args", path.display()))
+            parse_tues_args(json).with_context(|| format!("{}: tues-args", path.display()))?
         }
-        None => Ok(ScriptDefaults::default()),
+        None => ScriptDefaults::default(),
+    };
+    if let Some(json) = header.provider {
+        defaults.provider = Some(
+            parse_provider(json).with_context(|| format!("{}: tues-provider", path.display()))?,
+        );
     }
+    if let Some(json) = header.provider_args {
+        defaults.provider_args = Some(
+            parse_provider_args(json)
+                .with_context(|| format!("{}: tues-provider-args", path.display()))?,
+        );
+    }
+    if defaults.provider.is_none() && defaults.provider_args.is_some() {
+        anyhow::bail!(
+            "{}: tues-provider-args requires tues-provider",
+            path.display()
+        );
+    }
+    Ok(defaults)
 }
 
-/// JSON after `tues-args =` in the first comment block, if that line exists.
-fn header_json(text: &str) -> anyhow::Result<Option<&str>> {
+/// JSON values from `tues-*` lines in the first comment block.
+struct HeaderDirectives<'a> {
+    args: Option<&'a str>,
+    provider: Option<&'a str>,
+    provider_args: Option<&'a str>,
+}
+
+fn header_directives(text: &str) -> anyhow::Result<HeaderDirectives<'_>> {
     let mut in_block = false;
-    let mut found = None;
+    let mut args = None;
+    let mut provider = None;
+    let mut provider_args = None;
     for line in text.lines() {
         if let Some(body) = comment_body(line) {
             in_block = true;
-            if let Some(json) = tues_args_value(body) {
-                if found.is_some() {
+            // The longer key first: `tues-provider` is a prefix of
+            // `tues-provider-args`, and a failed match does not consume the line.
+            if let Some(json) = directive_value(body, "tues-provider-args") {
+                if provider_args.is_some() {
+                    anyhow::bail!("multiple tues-provider-args lines in the script header");
+                }
+                provider_args = Some(json);
+            } else if let Some(json) = directive_value(body, "tues-provider") {
+                if provider.is_some() {
+                    anyhow::bail!("multiple tues-provider lines in the script header");
+                }
+                provider = Some(json);
+            } else if let Some(json) = directive_value(body, "tues-args") {
+                if args.is_some() {
                     anyhow::bail!("multiple tues-args lines in the script header");
                 }
-                found = Some(json);
+                args = Some(json);
             }
         } else if line.trim().is_empty() {
             if in_block {
@@ -910,7 +979,17 @@ fn header_json(text: &str) -> anyhow::Result<Option<&str>> {
             break;
         }
     }
-    Ok(found)
+    Ok(HeaderDirectives {
+        args,
+        provider,
+        provider_args,
+    })
+}
+
+/// JSON after `tues-args =` in the first comment block, if that line exists.
+#[cfg(test)]
+fn header_json(text: &str) -> anyhow::Result<Option<&str>> {
+    Ok(header_directives(text)?.args)
 }
 
 /// Body of a `#` or `//` comment line, after the marker.
@@ -922,8 +1001,16 @@ fn comment_body(line: &str) -> Option<&str> {
 }
 
 /// Text after `tues-args =`, ignoring whitespace around the key and the sign.
+#[cfg(test)]
 fn tues_args_value(body: &str) -> Option<&str> {
-    let rest = body.trim().strip_prefix("tues-args")?.trim_start();
+    directive_value(body, "tues-args")
+}
+
+/// Text after `key =` in a comment body. The next character after the key,
+/// aside from whitespace, must be `=`, so `tues-provider` does not match
+/// `tues-provider-args`.
+fn directive_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    let rest = body.trim().strip_prefix(key)?.trim_start();
     Some(rest.strip_prefix('=')?.trim())
 }
 
@@ -960,6 +1047,34 @@ fn parse_tues_args(json: &str) -> anyhow::Result<ScriptDefaults> {
         }
     }
     Ok(defaults)
+}
+
+fn parse_provider(json: &str) -> anyhow::Result<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).context("invalid tues-provider JSON")?;
+    let Some(name) = value.as_str() else {
+        anyhow::bail!("tues-provider must be a string");
+    };
+    if !provider_name_ok(name) {
+        anyhow::bail!("not a provider name: {name}");
+    }
+    Ok(name.to_string())
+}
+
+fn parse_provider_args(json: &str) -> anyhow::Result<Vec<String>> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).context("invalid tues-provider-args JSON")?;
+    let Some(items) = value.as_array() else {
+        anyhow::bail!("tues-provider-args must be a JSON array");
+    };
+    let mut args = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(arg) = item.as_str() else {
+            anyhow::bail!("tues-provider-args must be an array of strings");
+        };
+        args.push(arg.to_string());
+    }
+    Ok(args)
 }
 
 async fn run_host(
@@ -1545,6 +1660,127 @@ echo hi
     }
 
     #[test]
+    fn script_header_reads_provider_lines() {
+        let text = "\
+#!/bin/sh
+# tues-args = {\"pty\": false}
+# tues-provider = \"cl\"
+# tues-provider-args = [\"web01\", \"web02\"]
+echo hi
+";
+        let header = super::header_directives(text).unwrap();
+        assert_eq!(header.args, Some("{\"pty\": false}"));
+        assert_eq!(header.provider, Some("\"cl\""));
+        assert_eq!(header.provider_args, Some("[\"web01\", \"web02\"]"));
+
+        let loose = "#\ttues-provider\t=\t\"file\"\n// tues-provider-args=[\"hosts\"]\n";
+        let header = super::header_directives(loose).unwrap();
+        assert_eq!(header.provider, Some("\"file\""));
+        assert_eq!(header.provider_args, Some("[\"hosts\"]"));
+
+        let after = "#!/bin/sh\necho hi\n# tues-provider = \"cl\"\n";
+        assert_eq!(super::header_directives(after).unwrap().provider, None);
+
+        assert!(
+            super::header_directives("# tues-provider = \"a\"\n# tues-provider = \"b\"\n").is_err()
+        );
+        assert!(
+            super::header_directives("# tues-provider-args = []\n# tues-provider-args = []\n")
+                .is_err()
+        );
+        assert_eq!(
+            super::directive_value("tues-provider-args = []", "tues-provider"),
+            None
+        );
+    }
+
+    #[test]
+    fn provider_values_are_type_checked() {
+        fn err_name(json: &str) -> String {
+            super::parse_provider(json).unwrap_err().to_string()
+        }
+        fn err_args(json: &str) -> String {
+            super::parse_provider_args(json).unwrap_err().to_string()
+        }
+        assert!(err_name("[]").contains("must be a string"));
+        assert!(err_name("nope").contains("invalid tues-provider JSON"));
+        assert!(err_name("\"\"").contains("not a provider name"));
+        assert!(err_name("\"a/b\"").contains("not a provider name"));
+        assert_eq!(super::parse_provider("\"cl\"").unwrap(), "cl");
+
+        assert!(err_args("{}").contains("must be a JSON array"));
+        assert!(err_args("nope").contains("invalid tues-provider-args JSON"));
+        assert!(err_args("[1]").contains("array of strings"));
+        assert_eq!(
+            super::parse_provider_args("[]").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            super::parse_provider_args("[\"a\", \"b\"]").unwrap(),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn command_line_provider_overrides_the_script_header() {
+        let defaults = super::ScriptDefaults {
+            provider: Some("file".into()),
+            provider_args: Some(vec!["header".into()]),
+            ..Default::default()
+        };
+        let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "web01"]).unwrap();
+        let (name, args) = super::selected_provider(&cli, Some(&defaults)).unwrap();
+        assert_eq!(name, "cl");
+        assert_eq!(args, ["web01"]);
+
+        let cli = super::Cli::try_parse_from(["tues", "-s", "tool"]).unwrap();
+        let (name, args) = super::selected_provider(&cli, Some(&defaults)).unwrap();
+        assert_eq!(name, "file");
+        assert_eq!(args, ["header"]);
+
+        let bare = super::ScriptDefaults {
+            provider: Some("cl".into()),
+            ..Default::default()
+        };
+        let (name, args) = super::selected_provider(&cli, Some(&bare)).unwrap();
+        assert_eq!(name, "cl");
+        assert!(args.is_empty());
+
+        let err = super::selected_provider(&cli, None).unwrap_err();
+        assert!(err.to_string().contains("tues-provider"), "{err}");
+
+        let cli = super::Cli::try_parse_from(["tues", "true"]).unwrap();
+        let err = super::selected_provider(&cli, None).unwrap_err();
+        assert!(err.to_string().contains("after the command"), "{err}");
+    }
+
+    #[test]
+    fn provider_args_without_a_provider_are_rejected() {
+        let dir = std::env::temp_dir().join(format!("tues-script-provider-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("only-args");
+        std::fs::write(&path, "# tues-provider-args = [\"web01\"]\n").unwrap();
+        let err = super::load_script_defaults(&path).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("tues-provider-args requires tues-provider"),
+            "{err}"
+        );
+
+        let path = dir.join("both");
+        std::fs::write(
+            &path,
+            "# tues-provider = \"cl\"\n# tues-provider-args = [\"web01\"]\n",
+        )
+        .unwrap();
+        let defaults = super::load_script_defaults(&path).unwrap();
+        assert_eq!(defaults.provider.as_deref(), Some("cl"));
+        assert_eq!(defaults.provider_args.unwrap(), ["web01"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn binary_script_skips_the_header() {
         let dir = std::env::temp_dir().join(format!("tues-script-bin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1597,6 +1833,7 @@ echo hi
             user: Some("root".into()),
             pty: Some(true),
             prefix: Some(true),
+            ..Default::default()
         };
         let cli = super::Cli::try_parse_from([
             "tues",

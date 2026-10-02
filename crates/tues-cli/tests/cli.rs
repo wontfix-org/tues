@@ -899,6 +899,81 @@ fn missing_or_invalid_script_is_an_error() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("invalid tues-args JSON"), "{stderr}");
+
+    std::fs::write(dir.join("bad-provider"), "# tues-provider = nope\n").unwrap();
+    let out = tues_bin()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("bad-provider")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("invalid tues-provider JSON"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn script_header_provider_supplies_hosts_until_the_command_line_overrides_it() {
+    let f = sshd();
+    let dir = script_dir("provider");
+    let providers = dir.join("bin");
+    write_provider(&providers, "echo", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+    std::fs::write(
+        dir.join("from-header"),
+        format!(
+            "#!/bin/sh\n# tues-provider = \"echo\"\n# tues-provider-args = [\"{}\"]\necho from-header\n",
+            f.host
+        ),
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .env("PATH", path_with(&providers))
+        .arg("-s")
+        .arg("from-header")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "from-header\n");
+
+    std::fs::write(
+        dir.join("from-cli"),
+        "#!/bin/sh\n# tues-provider = \"cl\"\n# tues-provider-args = [\"no-such-host.invalid\"]\necho from-cli\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("from-cli")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "from-cli\n");
+
+    std::fs::write(dir.join("bare"), "#!/bin/sh\necho hi\n").unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("bare")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("or set tues-provider in the script header"),
+        "{stderr}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

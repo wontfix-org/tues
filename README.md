@@ -43,7 +43,7 @@ Key points:
 ## Command line
 
 ```text
-tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
+tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
@@ -68,7 +68,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] <PROVIDER> [ARGS]...
   -v, --verbose...           Verbose logging
 ```
 
-The provider, the positional after the command or `--script`, supplies the hosts. `cl` takes them as
+The provider, the positional after the command or `--script`, supplies the hosts. A `--script` file can name it in its header instead, and a provider on the command line overrides that. `cl` takes them as
 the remaining arguments. `file` reads them from files, one host per line, and
 `-` reads stdin. Any other name runs `tues-provider-<name>` from `PATH`, with
 the remaining arguments and options passed through, and reads the same
@@ -102,6 +102,9 @@ tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' cl we
 # A script from TUES_PATH (colon-separated, like PATH). It is uploaded, run
 # as ./my-script, and removed. Arguments are quoted inside the option value.
 TUES_PATH=./scripts tues -s "my-script --my-option arg" cl web01
+
+# The same script can name its own hosts, so the provider can be omitted.
+TUES_PATH=./scripts tues -s my-script
 ```
 
 `--script` looks the script up on `TUES_PATH`. A name that contains a `/` is a
@@ -109,12 +112,14 @@ file path and is not searched. The script is uploaded to each host, executed,
 and deleted afterwards, like a temporary `--file`.
 
 A text script (not a binary) may set defaults in its top comment block. The
-line is a `#` or `//` comment, whitespace around `tues-args` and `=` does not
+line is a `#` or `//` comment, whitespace around the key and `=` does not
 matter, and only that first block is read:
 
 ```sh
 #!/bin/sh
 # tues-args = {"user": "root", "pty": false, "prefix": true}
+# tues-provider = "cl"
+# tues-provider-args = ["web01", "web02"]
 ```
 
 `user` is the sudo user, `pty` requests a pseudo-terminal, and `prefix` labels
@@ -122,6 +127,11 @@ each output line with the host (`true` always, `false` never; omit it to
 prefix only when several hosts are selected). Omitting `pty` leaves the
 terminal off, the same as the command line. `--user`, `--pty` / `--no-pty`,
 and `--no-prefix` override the header.
+
+`tues-provider` is a JSON string (`cl`, `file`, or a provider name) and
+`tues-provider-args` is a JSON array of strings passed to that provider. They
+supply the hosts when the command line omits the provider. A provider on the
+command line replaces both lines.
 
 `--file SRC` uploads a file or directory (recursively) into the remote working
 directory under its own name and deletes it once the command has finished.
