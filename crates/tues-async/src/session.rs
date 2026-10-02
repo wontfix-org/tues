@@ -804,7 +804,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
                 if opts.password_authentication {
                     let req =
                         PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
-                    for attempt in 0..3u32 {
+                    for attempt in 0..opts.password_prompts {
                         tried.push("password".into());
                         let pw = match request_password(
                             &opts.password_manager,
@@ -846,7 +846,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
                 if opts.kbd_interactive_authentication {
                     let req =
                         PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
-                    'outer: for attempt in 0..3u32 {
+                    'outer: for attempt in 0..opts.password_prompts {
                         let mut resp = handle
                             .authenticate_keyboard_interactive_start(login_user.clone(), None)
                             .await
@@ -945,7 +945,7 @@ async fn load_identity(path: &Path, opts: &ResolvedOptions) -> Result<PrivateKey
         path.to_path_buf(),
     );
     debug_assert_eq!(req.kind, PasswordKind::KeyPassphrase);
-    for attempt in 0..3u32 {
+    for attempt in 0..opts.password_prompts {
         let pw = request_password(
             &opts.password_manager,
             req.clone(),

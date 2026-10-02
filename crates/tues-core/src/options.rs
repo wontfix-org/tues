@@ -210,6 +210,8 @@ pub struct ConnectOptions {
     pub set_env: Vec<(String, String)>,
     /// `TCPKeepAlive`. `None` means unset (OpenSSH default is yes).
     pub tcp_keepalive: Option<bool>,
+    /// `NumberOfPasswordPrompts`. `None` means unset (default 3). `0` asks never.
+    pub password_prompts: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -442,6 +444,14 @@ impl ConnectOptions {
         self
     }
 
+    /// How many times to ask for a password, keyboard-interactive answer, or
+    /// key passphrase (`NumberOfPasswordPrompts`). The default is 3. `0`
+    /// does not ask.
+    pub fn number_of_password_prompts(mut self, n: u32) -> Self {
+        self.password_prompts = Some(n);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -600,6 +610,10 @@ impl ConnectOptions {
                 .unwrap_or_else(AuthMethod::default_order),
             set_env,
             tcp_keepalive: self.tcp_keepalive.or(params.tcp_keepalive).unwrap_or(true),
+            password_prompts: self
+                .password_prompts
+                .or(params.password_prompts)
+                .unwrap_or(3),
         })
     }
 }
@@ -655,6 +669,8 @@ pub struct ResolvedOptions {
     pub set_env: Vec<(String, String)>,
     /// `SO_KEEPALIVE` on the direct TCP socket. Default yes.
     pub tcp_keepalive: bool,
+    /// Password, keyboard-interactive, and key-passphrase attempts.
+    pub password_prompts: u32,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -718,6 +734,7 @@ impl ResolvedOptions {
             // if a later exec on that hop needs it.
             set_env: Vec::new(),
             tcp_keepalive: Some(self.tcp_keepalive),
+            password_prompts: Some(self.password_prompts),
         }
     }
 }
@@ -1070,6 +1087,20 @@ mod tests {
             .resolve_with(Some(&cfg))
             .unwrap();
         assert!(forced.tcp_keepalive);
+    }
+
+    #[test]
+    fn password_prompts_default_to_three() {
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert_eq!(defaults.password_prompts, 3);
+        let cfg = SshConfig::parse_str("Host *\n NumberOfPasswordPrompts 1\n", None).unwrap();
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(from_config.password_prompts, 1);
+        let none = ConnectOptions::new("h")
+            .number_of_password_prompts(0)
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(none.password_prompts, 0);
     }
 
     use std::sync::Arc;

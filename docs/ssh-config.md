@@ -66,7 +66,7 @@ many hosts.
 
 | Setting | Difficulty | Status | Why it is only a maybe |
 |---|---|---|---|
-| `NumberOfPasswordPrompts` | 1 | not started | Cap how often the password manager is asked. Matters for unattended runs that should stop after one failure. |
+| `NumberOfPasswordPrompts` | 1 | done | Caps password, keyboard-interactive, and key-passphrase attempts. Default 3. `0` does not ask. |
 | `NoHostAuthenticationForLocalhost` | 1 | not started | Skip host-key checks for `localhost`. Used by tests and by forwarded local services. |
 | `RequiredRSASize` | 1 | not started | Reject an RSA host key shorter than N bits inside the check we already do. |
 | `SendEnv` | 2 | not started | Same `set_env` as `SetEnv`, but the value is a glob against the local environment. A pattern of `*` would copy the runner's environment onto every host. |

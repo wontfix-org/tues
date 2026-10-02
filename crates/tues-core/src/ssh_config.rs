@@ -134,6 +134,8 @@ pub struct HostParams {
     pub set_env: Vec<(String, String)>,
     /// `TCPKeepAlive`. `None` means the directive was not set (default yes).
     pub tcp_keepalive: Option<bool>,
+    /// `NumberOfPasswordPrompts`. `None` means the directive was not set (default 3).
+    pub password_prompts: Option<u32>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -420,6 +422,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             Some(AuthMethod::parse_list(value))
         ),
         "tcpkeepalive" => first!(p.tcp_keepalive, yes_no(value)),
+        "numberofpasswordprompts" => first!(p.password_prompts, value.parse().ok()),
         "setenv" => {
             for word in split_words(value) {
                 let Some((name, val)) = word.split_once('=') else {
