@@ -95,6 +95,11 @@ TUES_PW=s3cret tues -u root 'apt-get update' cl db01 db02
 tues 'uptime' file web.list
 tues --show-hosts 'uptime' netbox --site nyc
 
+# Hosts from Foreman. This package installs tues-provider-fm.
+# FOREMAN_URL may include credentials. -c selects a Puppet class (* globs);
+# an expression is a Foreman search. Passing both keeps hosts that match both.
+FOREMAN_URL='https://user:password@foreman.example/' tues 'uptime' fm 'class = role::web'
+
 # Upload first. `deploy.sh` lands in the remote working directory and is
 # removed afterwards; `app.conf` is kept at its destination.
 tues --file ./deploy.sh --file ./app.conf:/etc/app/app.conf 'sh deploy.sh' cl web01

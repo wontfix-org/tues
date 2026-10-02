@@ -13,12 +13,17 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dynamic = ["version"]
+dependencies = [
+    "click>=8.1",
+    "requests>=2.4",
+]
 
 [project.urls]
 Repository = "https://github.com/mvb/tues-rs"
 
 [project.scripts]
 tues = "tues.__main__:main"
+tues-provider-fm = "tues.provider_fm:main"
 
 [dependency-groups]
 dev = ["maturin>=1.7,<2.0", "pytest>=8", "coverage>=7", "testcontainers>=4.10,<5"]
