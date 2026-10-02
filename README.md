@@ -438,6 +438,42 @@ Also available: `call`, `check_call`, `getoutput`, `getstatusoutput`,
 `Popen.communicate(input, timeout)`, `Popen.wait(timeout)`, `Popen.poll()`,
 `Popen.send_signal("USR1")`, `bufsize=`, `encoding=`/`errors=`, `env=`, `cwd=`.
 
+### Several hosts
+
+`tues.run` is the legacy API from the original package (`tues.legacy`),
+written on top of `Session`: one shell command, a list of hosts, and a
+`Task` per host. A single host returns the task itself. `connect_options`
+is forwarded to `Session.connect`. New code should use `Session`; this
+entry point stays so existing callers keep working.
+
+```python
+import tues
+
+tasks = tues.run(
+    ["web01", "web02"],
+    "id -un",
+    user="root",
+    prefix=True,
+    capture_output=True,
+    text=True,
+    pool_size=4,
+    connect_options={"host_key_policy": "accept-new"},
+)
+for task in tasks:
+    print(task.host, task.stdout.strip())
+```
+
+`files` are uploaded into the remote working directory and removed afterwards;
+the command sees them as `$TUES_FILE1`, `$TUES_FILE2`, …. `Script` loads a
+local file from `TUES_PATH` (or `tues.DEFAULT_PATH`), uploads it and runs it.
+`provider("cl", ["web01"])` and `provider("file", ["hosts.txt"])` resolve
+hosts the same way the command line does. `check=True` stops at the first
+non-zero exit (one host at a time) and raises `TuesTaskError`. `args[0]`
+is the `Task`; `__cause__` is set only when the host failed before a
+status. A refused sudo or login password raises `TuesUserAbort`. A
+parallel run collects connection failures into `TuesErrorGroup`
+(`message`, `exceptions`, `results`).
+
 ### asyncio
 
 ```python

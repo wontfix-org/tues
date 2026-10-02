@@ -22,6 +22,11 @@ asyncio::
         proc = await s.create_subprocess_exec("id", "-un", stdout=tues.PIPE)
         out, _ = await proc.communicate()
 
+:func:`run` is the legacy multi-host API from the original tues package
+(:mod:`tues.legacy`): one shell command, many hosts, optional ``sudo``,
+file upload and output prefixes. It is implemented on :class:`Session`
+and kept for existing callers.
+
 Intentional differences from :mod:`subprocess`, all consequences of the
 process running on another machine:
 
@@ -95,6 +100,26 @@ from ._tues import (
     TuesError,
     __version__,
 )
+from .legacy import (
+    DEFAULT_ENCODING,
+    DEFAULT_PATH,
+    DIR_ABORT,
+    DIR_IGNORE,
+    DIR_ROTATE,
+    DIR_WIPE,
+    Host,
+    PasswordManager,
+    Script,
+    Task,
+    TuesErrorGroup,
+    TuesLookupError,
+    TuesOutputDirExists,
+    TuesScriptNotFoundError,
+    TuesTaskError,
+    TuesUserAbort,
+    provider,
+    run,
+)
 
 __all__ = [
     "PIPE",
@@ -123,4 +148,22 @@ __all__ = [
     "SudoError",
     "SftpError",
     "__version__",
+    "run",
+    "Task",
+    "Host",
+    "Script",
+    "PasswordManager",
+    "provider",
+    "DIR_ABORT",
+    "DIR_ROTATE",
+    "DIR_WIPE",
+    "DIR_IGNORE",
+    "DEFAULT_ENCODING",
+    "DEFAULT_PATH",
+    "TuesErrorGroup",
+    "TuesLookupError",
+    "TuesScriptNotFoundError",
+    "TuesOutputDirExists",
+    "TuesUserAbort",
+    "TuesTaskError",
 ]
