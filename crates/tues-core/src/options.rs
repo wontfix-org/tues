@@ -121,6 +121,18 @@ pub struct ConnectOptions {
     pub proxy_jump: Option<Vec<String>>,
     pub connect_timeout: Option<Duration>,
     pub server_alive_interval: Option<Duration>,
+    /// `ServerAliveCountMax`. Unset keeps russh's default of 3.
+    pub server_alive_count_max: Option<usize>,
+    /// `Ciphers` list, including a leading `+`, `-`, or `^`.
+    pub ciphers: Option<String>,
+    /// `MACs` list.
+    pub macs: Option<String>,
+    /// `KexAlgorithms` list.
+    pub kex_algorithms: Option<String>,
+    /// `HostKeyAlgorithms` list. Certificate names are offered as certificates.
+    pub host_key_algorithms: Option<String>,
+    /// `RekeyLimit` arguments, for example `512M 30m`.
+    pub rekey_limit: Option<String>,
     pub compression: Option<bool>,
     pub pubkey_authentication: Option<bool>,
     pub password_authentication: Option<bool>,
@@ -212,6 +224,42 @@ impl ConnectOptions {
 
     pub fn server_alive_interval(mut self, d: Duration) -> Self {
         self.server_alive_interval = Some(d);
+        self
+    }
+
+    /// Unanswered server-alive messages before the connection is closed.
+    pub fn server_alive_count_max(mut self, n: usize) -> Self {
+        self.server_alive_count_max = Some(n);
+        self
+    }
+
+    /// Symmetric ciphers, in OpenSSH list syntax.
+    pub fn ciphers(mut self, list: impl Into<String>) -> Self {
+        self.ciphers = Some(list.into());
+        self
+    }
+
+    /// MAC algorithms, in OpenSSH list syntax.
+    pub fn macs(mut self, list: impl Into<String>) -> Self {
+        self.macs = Some(list.into());
+        self
+    }
+
+    /// Key exchange algorithms, in OpenSSH list syntax.
+    pub fn kex_algorithms(mut self, list: impl Into<String>) -> Self {
+        self.kex_algorithms = Some(list.into());
+        self
+    }
+
+    /// Host key algorithms, in OpenSSH list syntax.
+    pub fn host_key_algorithms(mut self, list: impl Into<String>) -> Self {
+        self.host_key_algorithms = Some(list.into());
+        self
+    }
+
+    /// Data and time limits before rekey, in `RekeyLimit` syntax.
+    pub fn rekey_limit(mut self, spec: impl Into<String>) -> Self {
+        self.rekey_limit = Some(spec.into());
         self
     }
 
@@ -359,6 +407,20 @@ impl ConnectOptions {
             proxy_jump,
             connect_timeout: self.connect_timeout.or(params.connect_timeout),
             server_alive_interval: self.server_alive_interval.or(params.server_alive_interval),
+            server_alive_count_max: self
+                .server_alive_count_max
+                .or(params.server_alive_count_max),
+            ciphers: self.ciphers.clone().or(params.ciphers.clone()),
+            macs: self.macs.clone().or(params.macs.clone()),
+            kex_algorithms: self
+                .kex_algorithms
+                .clone()
+                .or(params.kex_algorithms.clone()),
+            host_key_algorithms: self
+                .host_key_algorithms
+                .clone()
+                .or(params.host_key_algorithms.clone()),
+            rekey_limit: self.rekey_limit.clone().or(params.rekey_limit.clone()),
             compression: self.compression.or(params.compression).unwrap_or(false),
             pubkey_authentication: self
                 .pubkey_authentication
@@ -412,6 +474,12 @@ pub struct ResolvedOptions {
     pub proxy_jump: Vec<JumpHost>,
     pub connect_timeout: Option<Duration>,
     pub server_alive_interval: Option<Duration>,
+    pub server_alive_count_max: Option<usize>,
+    pub ciphers: Option<String>,
+    pub macs: Option<String>,
+    pub kex_algorithms: Option<String>,
+    pub host_key_algorithms: Option<String>,
+    pub rekey_limit: Option<String>,
     pub compression: bool,
     pub pubkey_authentication: bool,
     pub password_authentication: bool,
@@ -463,6 +531,12 @@ impl ResolvedOptions {
             proxy_jump: None,
             connect_timeout: self.connect_timeout,
             server_alive_interval: self.server_alive_interval,
+            server_alive_count_max: self.server_alive_count_max,
+            ciphers: self.ciphers.clone(),
+            macs: self.macs.clone(),
+            kex_algorithms: self.kex_algorithms.clone(),
+            host_key_algorithms: self.host_key_algorithms.clone(),
+            rekey_limit: self.rekey_limit.clone(),
             compression: Some(self.compression),
             pubkey_authentication: Some(self.pubkey_authentication),
             password_authentication: Some(self.password_authentication),
@@ -612,6 +686,42 @@ mod tests {
             .unwrap();
         assert_eq!(r.port, 22);
         assert_eq!(r.host_key_policy, HostKeyPolicy::Strict);
+    }
+
+    #[test]
+    fn transport_keywords_builder_beats_config() {
+        let cfg = SshConfig::parse_str(
+            "Host *\n ServerAliveCountMax 9\n Ciphers aes128-ctr\n MACs hmac-sha2-256\n KexAlgorithms curve25519-sha256\n HostKeyAlgorithms ssh-ed25519\n RekeyLimit 512M\n",
+            None,
+        )
+        .unwrap();
+        let r = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(r.server_alive_count_max, Some(9));
+        assert_eq!(r.ciphers.as_deref(), Some("aes128-ctr"));
+        assert_eq!(r.macs.as_deref(), Some("hmac-sha2-256"));
+        assert_eq!(r.kex_algorithms.as_deref(), Some("curve25519-sha256"));
+        assert_eq!(r.host_key_algorithms.as_deref(), Some("ssh-ed25519"));
+        assert_eq!(r.rekey_limit.as_deref(), Some("512M"));
+
+        let r = ConnectOptions::new("h")
+            .server_alive_count_max(2)
+            .ciphers("^aes256-ctr")
+            .rekey_limit("1G 10m")
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(r.server_alive_count_max, Some(2));
+        assert_eq!(r.ciphers.as_deref(), Some("^aes256-ctr"));
+        assert_eq!(r.rekey_limit.as_deref(), Some("1G 10m"));
+        assert_eq!(r.macs.as_deref(), Some("hmac-sha2-256"));
+
+        let jump = r.for_jump(&JumpHost {
+            login_user: None,
+            host: "jump".into(),
+            port: None,
+        });
+        assert_eq!(jump.ciphers.as_deref(), Some("^aes256-ctr"));
+        assert_eq!(jump.server_alive_count_max, Some(2));
+        assert_eq!(jump.rekey_limit.as_deref(), Some("1G 10m"));
     }
 
     #[test]

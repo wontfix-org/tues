@@ -17,6 +17,7 @@ mod command;
 mod files;
 mod session;
 mod sftp;
+mod transport;
 
 pub use child::{Child, ChildSignaller, ChildStderr, ChildStdin, ChildStdout};
 pub use command::Command;

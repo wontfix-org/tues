@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -463,21 +462,16 @@ async fn with_timeout<F: std::future::Future>(
 }
 
 fn build_config(opts: &ResolvedOptions) -> client::Config {
-    let mut config = client::Config {
-        inactivity_timeout: None,
-        keepalive_interval: opts.server_alive_interval,
-        keepalive_max: 3,
-        nodelay: true,
-        ..Default::default()
-    };
-    if opts.compression {
-        config.preferred.compression = Cow::Borrowed(&[
-            russh::compression::ZLIB_LEGACY,
-            russh::compression::ZLIB,
-            russh::compression::NONE,
-        ]);
-    }
-    config
+    crate::transport::build_client_config(&crate::transport::TransportConfig {
+        server_alive_interval: opts.server_alive_interval,
+        server_alive_count_max: opts.server_alive_count_max,
+        compression: opts.compression,
+        ciphers: opts.ciphers.as_deref(),
+        macs: opts.macs.as_deref(),
+        kex_algorithms: opts.kex_algorithms.as_deref(),
+        host_key_algorithms: opts.host_key_algorithms.as_deref(),
+        rekey_limit: opts.rekey_limit.as_deref(),
+    })
 }
 
 fn map_connect_error(e: russh::Error, opts: &ResolvedOptions) -> Error {

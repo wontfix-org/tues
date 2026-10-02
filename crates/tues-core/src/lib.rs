@@ -10,6 +10,7 @@
 //! It also hosts the exchangeable [`PasswordManager`] interface, the
 //! `~/.ssh/config` parser, and the [`ConnectOptions`] resolution logic.
 
+pub mod algo_list;
 pub mod error;
 pub mod exec;
 pub mod fs;

@@ -2,7 +2,9 @@
 //!
 //! Supports `Host` blocks with `*`/`?` globs and `!` negation, `Include`
 //! (with globbing in the last path component), `Match all`, and the client
-//! options `tues` understands. Unknown directives are retained in
+//! options `tues` understands, including the transport keywords
+//! `ServerAliveCountMax`, `Ciphers`, `MACs`, `KexAlgorithms`,
+//! `HostKeyAlgorithms`, and `RekeyLimit`. Unknown directives are retained in
 //! [`HostParams::unknown`] so a normal config still loads. Other `Match`
 //! blocks are skipped.
 //!
@@ -99,6 +101,18 @@ pub struct HostParams {
     pub user_known_hosts_file: Vec<PathBuf>,
     pub connect_timeout: Option<Duration>,
     pub server_alive_interval: Option<Duration>,
+    /// `ServerAliveCountMax`. `None` means the directive was not set.
+    pub server_alive_count_max: Option<usize>,
+    /// Raw `Ciphers` value, including a leading `+`, `-`, or `^`.
+    pub ciphers: Option<String>,
+    /// Raw `MACs` value.
+    pub macs: Option<String>,
+    /// Raw `KexAlgorithms` value.
+    pub kex_algorithms: Option<String>,
+    /// Raw `HostKeyAlgorithms` value.
+    pub host_key_algorithms: Option<String>,
+    /// Raw `RekeyLimit` arguments, for example `512M 30m`.
+    pub rekey_limit: Option<String>,
     pub compression: Option<bool>,
     pub pubkey_authentication: Option<bool>,
     pub password_authentication: Option<bool>,
@@ -321,6 +335,12 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
                 .filter(|s: &u64| *s > 0)
                 .map(Duration::from_secs)
         ),
+        "serveralivecountmax" => first!(p.server_alive_count_max, value.parse().ok()),
+        "ciphers" => first!(p.ciphers, Some(value.to_string())),
+        "macs" => first!(p.macs, Some(value.to_string())),
+        "kexalgorithms" => first!(p.kex_algorithms, Some(value.to_string())),
+        "hostkeyalgorithms" => first!(p.host_key_algorithms, Some(value.to_string())),
+        "rekeylimit" => first!(p.rekey_limit, Some(value.to_string())),
         "compression" => first!(p.compression, yes_no(value)),
         "pubkeyauthentication" => first!(p.pubkey_authentication, yes_no(value)),
         "passwordauthentication" => first!(p.password_authentication, yes_no(value)),
@@ -635,5 +655,38 @@ Host *
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transport_keywords_are_first_match() {
+        let text = "\
+Host *
+  ServerAliveCountMax 4
+  Ciphers aes128-ctr,aes256-ctr
+  MACs -hmac-sha1*
+  KexAlgorithms curve25519-sha256
+  HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com
+  RekeyLimit 512M 30m
+Host web
+  Ciphers +aes128-cbc
+  ServerAliveCountMax 9
+";
+        let cfg = SshConfig::parse_str(text, None).unwrap();
+        let p = cfg.query("web");
+        assert_eq!(p.server_alive_count_max, Some(4));
+        assert_eq!(p.ciphers.as_deref(), Some("aes128-ctr,aes256-ctr"));
+        assert_eq!(p.macs.as_deref(), Some("-hmac-sha1*"));
+        assert_eq!(p.kex_algorithms.as_deref(), Some("curve25519-sha256"));
+        assert_eq!(
+            p.host_key_algorithms.as_deref(),
+            Some("ssh-ed25519,ssh-ed25519-cert-v01@openssh.com")
+        );
+        assert_eq!(p.rekey_limit.as_deref(), Some("512M 30m"));
+        assert!(p.unknown.is_empty());
+
+        let other = cfg.query("other");
+        assert_eq!(other.ciphers.as_deref(), Some("aes128-ctr,aes256-ctr"));
+        let web_only = cfg.query("web");
+        assert_eq!(web_only.ciphers.as_deref(), Some("aes128-ctr,aes256-ctr"));
     }
 }
