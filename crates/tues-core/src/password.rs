@@ -152,6 +152,14 @@ pub trait PasswordManager: Send {
 
     /// The last password returned for `req` was rejected.
     fn invalidate(&mut self, req: &PasswordRequest);
+
+    /// Whether `get` for `req` may block waiting for a person.
+    ///
+    /// `BatchMode yes` refuses a manager that would prompt. A cached or
+    /// pre-supplied password is still used.
+    fn prompts_for(&self, _req: &PasswordRequest) -> bool {
+        true
+    }
 }
 
 /// A shareable, thread-safe password manager handle.
@@ -239,6 +247,10 @@ impl<P: PasswordPrompter> PasswordManager for MemoizingPasswordManager<P> {
     fn invalidate(&mut self, req: &PasswordRequest) {
         self.cache.remove(&req.cache_key());
     }
+
+    fn prompts_for(&self, req: &PasswordRequest) -> bool {
+        !self.cache.contains_key(&req.cache_key())
+    }
 }
 
 /// Always returns the same password (automation, tests).
@@ -257,6 +269,10 @@ impl PasswordManager for StaticPasswordManager {
     }
 
     fn invalidate(&mut self, _req: &PasswordRequest) {}
+
+    fn prompts_for(&self, _req: &PasswordRequest) -> bool {
+        false
+    }
 }
 
 /// Refuses every request.
@@ -272,6 +288,10 @@ impl PasswordManager for NoPasswordManager {
     }
 
     fn invalidate(&mut self, _req: &PasswordRequest) {}
+
+    fn prompts_for(&self, _req: &PasswordRequest) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -300,6 +320,8 @@ mod tests {
         let other = PasswordRequest::sudo("h2", 22, "u", "root");
         assert_eq!(pm.get(&other).unwrap().expose_secret(), "pw2");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(!pm.prompts_for(&req));
+        assert!(pm.prompts_for(&PasswordRequest::login("other", 22, "u")));
     }
 
     #[test]

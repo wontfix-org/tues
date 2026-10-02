@@ -123,6 +123,8 @@ pub struct HostParams {
     pub kbd_interactive_authentication: Option<bool>,
     pub forward_agent: Option<bool>,
     pub request_tty: Option<bool>,
+    /// `BatchMode`. `yes` refuses to prompt for a password or passphrase.
+    pub batch_mode: Option<bool>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -390,6 +392,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         "passwordauthentication" => first!(p.password_authentication, yes_no(value)),
         "kbdinteractiveauthentication" => first!(p.kbd_interactive_authentication, yes_no(value)),
         "forwardagent" => first!(p.forward_agent, yes_no(value)),
+        "batchmode" => first!(p.batch_mode, yes_no(value)),
         "requesttty" => first!(
             p.request_tty,
             match value.to_ascii_lowercase().as_str() {
@@ -768,5 +771,18 @@ Host *
             Some(vec![PathBuf::from("/etc/ssh/fallback")])
         );
         assert!(cfg.query("other").unknown.is_empty());
+    }
+
+    #[test]
+    fn batch_mode_is_first_match() {
+        let text = "\
+Host web
+  BatchMode no
+Host *
+  BatchMode yes
+";
+        let cfg = SshConfig::parse_str(text, None).unwrap();
+        assert_eq!(cfg.query("web").batch_mode, Some(false));
+        assert_eq!(cfg.query("other").batch_mode, Some(true));
     }
 }

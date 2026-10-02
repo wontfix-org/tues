@@ -445,6 +445,7 @@ pub(crate) fn spawn_child(
     plan: ExecPlan,
     password_manager: SharedPasswordManager,
     password_request: Option<PasswordRequest>,
+    batch_mode: bool,
 ) -> Child {
     let machine = ExecMachine::new(&plan);
 
@@ -474,6 +475,7 @@ pub(crate) fn spawn_child(
         },
         password_manager,
         password_request,
+        batch_mode,
     ));
 
     Child {
@@ -507,6 +509,7 @@ async fn pump(
     mut io: PumpIo,
     password_manager: SharedPasswordManager,
     password_request: Option<PasswordRequest>,
+    batch_mode: bool,
 ) {
     let mut pw_task: Option<tokio::task::JoinHandle<Result<tues_core::SecretString>>> = None;
     let mut stdin_open = io.stdin_rx.is_some();
@@ -544,7 +547,7 @@ async fn pump(
                     };
                     let pm = password_manager.clone();
                     pw_task = Some(tokio::spawn(async move {
-                        request_password(&pm, req, retry).await
+                        request_password(&pm, req, retry, batch_mode).await
                     }));
                 }
                 Effect::Finished(result) => {

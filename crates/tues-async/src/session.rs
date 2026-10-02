@@ -255,6 +255,7 @@ impl Session {
             plan,
             opts.password_manager.clone(),
             password_request,
+            opts.batch_mode,
         ))
     }
 
@@ -397,7 +398,9 @@ impl Session {
                             )));
                             continue;
                         };
-                        match request_password(&opts.password_manager, req, retry).await {
+                        match request_password(&opts.password_manager, req, retry, opts.batch_mode)
+                            .await
+                        {
                             Ok(pw) => machine.handle(Event::Password(pw)),
                             Err(e) => machine.handle(Event::PasswordUnavailable(e)),
                         }
@@ -610,6 +613,7 @@ pub(crate) async fn request_password(
     pm: &SharedPasswordManager,
     req: PasswordRequest,
     invalidate_first: bool,
+    batch_mode: bool,
 ) -> Result<SecretString> {
     let pm = pm.clone();
     tokio::task::spawn_blocking(move || {
@@ -618,6 +622,11 @@ pub(crate) async fn request_password(
             .map_err(|_| Error::Password("password manager lock poisoned".into()))?;
         if invalidate_first {
             guard.invalidate(&req);
+        }
+        if batch_mode && guard.prompts_for(&req) {
+            return Err(Error::Password(
+                "batch mode refuses to prompt for a password".into(),
+            ));
         }
         guard.get(&req)
     })
@@ -716,7 +725,13 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
         let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
         for attempt in 0..3u32 {
             tried.push("password".into());
-            let pw = match request_password(&opts.password_manager, req.clone(), attempt > 0).await
+            let pw = match request_password(
+                &opts.password_manager,
+                req.clone(),
+                attempt > 0,
+                opts.batch_mode,
+            )
+            .await
             {
                 Ok(pw) => pw,
                 Err(e) => {
@@ -776,6 +791,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
                                         &opts.password_manager,
                                         req.clone(),
                                         attempt > 0,
+                                        opts.batch_mode,
                                     )
                                     .await
                                     {
@@ -837,7 +853,9 @@ async fn load_identity(path: &Path, opts: &ResolvedOptions) -> Result<PrivateKey
     );
     debug_assert_eq!(req.kind, PasswordKind::KeyPassphrase);
     for attempt in 0..3u32 {
-        let pw = request_password(&opts.password_manager, req.clone(), attempt > 0).await?;
+        let pw =
+            request_password(&opts.password_manager, req.clone(), attempt > 0, opts.batch_mode)
+                .await?;
         use tues_core::ExposeSecret;
         match load_secret_key(path, Some(pw.expose_secret())) {
             Ok(k) => return Ok(k),
@@ -986,5 +1004,28 @@ mod tests {
         assert!(matches!(err, russh::Error::UnknownKey));
         assert!(std::fs::read_to_string(&global).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Prompting;
+    impl tues_core::PasswordManager for Prompting {
+        fn get(&mut self, _: &PasswordRequest) -> Result<SecretString> {
+            panic!("batch mode must not prompt");
+        }
+        fn invalidate(&mut self, _: &PasswordRequest) {}
+    }
+
+    #[tokio::test]
+    async fn batch_mode_refuses_a_prompt_and_keeps_a_known_password() {
+        let req = PasswordRequest::login("h", 22, "u");
+        let prompting = tues_core::shared(Prompting);
+        let err = request_password(&prompting, req.clone(), false, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Password(_)));
+
+        let known = tues_core::shared(tues_core::StaticPasswordManager::new("secret"));
+        let pw = request_password(&known, req, false, true).await.unwrap();
+        use tues_core::ExposeSecret;
+        assert_eq!(pw.expose_secret(), "secret");
     }
 }

@@ -157,6 +157,8 @@ pub struct ConnectOptions {
     /// value runs commands via `sudo -u`.
     pub user: Option<String>,
     pub password_manager: Option<SharedPasswordManager>,
+    /// `BatchMode`. `yes` refuses a password manager that would prompt.
+    pub batch_mode: Option<bool>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -346,6 +348,14 @@ impl ConnectOptions {
         self
     }
 
+    /// Refuse to prompt for a password or key passphrase (`BatchMode yes`).
+    ///
+    /// A password the manager already has is still used.
+    pub fn batch_mode(mut self, yes: bool) -> Self {
+        self.batch_mode = Some(yes);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -477,6 +487,7 @@ impl ConnectOptions {
             user: self.user.clone(),
             password_manager,
             ssh_config: config.cloned(),
+            batch_mode: self.batch_mode.or(params.batch_mode).unwrap_or(false),
         })
     }
 }
@@ -522,6 +533,8 @@ pub struct ResolvedOptions {
     pub password_manager: SharedPasswordManager,
     /// The config used, so jump hosts resolve against the same file.
     pub ssh_config: Option<SshConfig>,
+    /// `BatchMode yes`: do not prompt for a password or key passphrase.
+    pub batch_mode: bool,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -578,6 +591,7 @@ impl ResolvedOptions {
             },
             user: None,
             password_manager: Some(self.password_manager.clone()),
+            batch_mode: Some(self.batch_mode),
         }
     }
 }
@@ -822,6 +836,26 @@ mod tests {
         assert_eq!(j.host_name, "jump");
         assert_eq!(j.host_key_policy, HostKeyPolicy::Off);
         assert!(Arc::ptr_eq(&j.password_manager, &r.password_manager));
+    }
+
+    #[test]
+    fn batch_mode_defaults_off_and_builder_wins() {
+        let cfg = SshConfig::parse_str("Host *\n BatchMode yes\n", None).unwrap();
+        let off = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert!(!off.batch_mode);
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert!(from_config.batch_mode);
+        let forced = ConnectOptions::new("h")
+            .batch_mode(false)
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert!(!forced.batch_mode);
+        let jump = from_config.for_jump(&JumpHost {
+            login_user: None,
+            host: "jump".into(),
+            port: None,
+        });
+        assert_eq!(jump.batch_mode, Some(true));
     }
 
     use std::sync::Arc;

@@ -357,6 +357,10 @@ impl PasswordManager for PyPasswordSource {
             }
         })
     }
+
+    fn prompts_for(&self, _req: &tues_core::PasswordRequest) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------

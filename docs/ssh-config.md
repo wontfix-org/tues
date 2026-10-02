@@ -46,7 +46,7 @@ up. A fan-out runner hits them as often as an interactive client does.
 
 | Setting | Difficulty | Status | Why it belongs here |
 |---|---|---|---|
-| `BatchMode` | 1 | not started | `yes` means a missing password or passphrase fails the run. That is the right default for CI and for a loop over many hosts. |
+| `BatchMode` | 1 | done | `yes` refuses a password manager that would prompt, including sudo. A password the manager already has is still used. |
 | `ConnectionAttempts` | 1 | not started | Retry the TCP connect a few times. Flaky links and host boots show up in automation the same way they do at a prompt. |
 | `PreferredAuthentications` | 1 | not started | Reorder the methods tues already tries. Configs use this to force `publickey` and to keep a password prompt off a host that should never ask. |
 | `SetEnv` | 1 | not started | `Channel::set_env` before exec. Literal `NAME=value` from the config, applied to every command on that host. |
