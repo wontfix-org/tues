@@ -58,6 +58,10 @@ test:
 preview *args:
     "{{justfile_directory()}}/scripts/release" --preview {{args}}
 
+# Tag and build the next release candidate of VERSION (0.3.0 -> 0.3.0rc1). Extra arguments are passed to scripts/release.
+rc version *args:
+    "{{justfile_directory()}}/scripts/release" --rc "{{version}}" {{args}}
+
 # Tag and build VERSION. Extra arguments are passed to scripts/release.
 release version *args:
     "{{justfile_directory()}}/scripts/release" "{{version}}" {{args}}

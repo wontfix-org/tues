@@ -622,8 +622,8 @@ there), commits it, and tags `v<version>`. It then builds an sdist and one
 wheel per CPython into `dist/<version>/` for an internal index. Each wheel
 carries the extension module and the `tues` console script. Older version
 directories are left in place. `dist/latest` points at the version just
-built, and `dist/stable` points at the newest tagged release. The tag is not
-pushed and the artifacts are not uploaded.
+built, and `dist/stable` points at the newest tagged final release. The tag
+is not pushed and the artifacts are not uploaded.
 
 ```sh
 just release 0.2.0
@@ -645,6 +645,28 @@ builds and a glibc old enough for the `manylinux2014` tag. Each wheel is
 tagged for its interpreter (`cp39`, `cp311`, `cp312`, `cp313`). The sdist is
 built first and the wheels are built from it. Change the set with
 `--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. Docker is required.
+
+`just rc` tags a release candidate of a future version. Pass the upcoming
+release and the next free `rcN` is chosen from the local tags, or pass the
+candidate itself:
+
+```sh
+just rc 0.3.0
+# Cargo.toml 0.3.0-rc.1, wheels named 0.3.0rc1
+just rc 0.3.0rc2 --dry-run
+```
+
+Cargo stores `X.Y.Z-rc.N`. That is SemVer, and PEP 440 normalizes it to
+`X.Y.ZrcN`. A version with an `rcN` suffix is a pre-release, so pip and uv
+keep installing the current final release until someone asks for the
+candidate (`tues==0.3.0rc1`) or passes `--pre`. The candidate is committed
+and tagged (`v0.3.0-rc.1`). `dist/latest` and `dist/rc` point at it;
+`dist/stable` stays on the last final release.
+
+```sh
+git push origin HEAD v0.3.0-rc.1
+twine upload --repository-url "$TUES_PYPI_URL" dist/rc/*
+```
 
 `--preview` builds a throwaway version instead of tagging a release. With no
 version it starts from the workspace version:
