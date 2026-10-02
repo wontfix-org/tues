@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::{Error, Result};
-use crate::options::HostKeyPolicy;
+use crate::options::{AuthMethod, HostKeyPolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pattern {
@@ -127,6 +127,9 @@ pub struct HostParams {
     pub batch_mode: Option<bool>,
     /// `ConnectionAttempts`. `None` means the directive was not set.
     pub connection_attempts: Option<u32>,
+    /// `PreferredAuthentications`. `None` means the directive was not set.
+    /// An empty list means the directive named no method tues can try.
+    pub preferred_authentications: Option<Vec<AuthMethod>>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -398,6 +401,10 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         "connectionattempts" => first!(
             p.connection_attempts,
             value.parse::<u32>().ok().filter(|n| *n > 0)
+        ),
+        "preferredauthentications" => first!(
+            p.preferred_authentications,
+            Some(AuthMethod::parse_list(value))
         ),
         "requesttty" => first!(
             p.request_tty,

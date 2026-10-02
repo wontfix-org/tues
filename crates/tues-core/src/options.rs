@@ -35,6 +35,49 @@ impl HostKeyPolicy {
     }
 }
 
+/// One method from `PreferredAuthentications`.
+///
+/// `gssapi-with-mic` and `hostbased` are not offered. `none` is probed before
+/// this list and is not a member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethod {
+    PublicKey,
+    Password,
+    KeyboardInteractive,
+}
+
+impl AuthMethod {
+    /// Methods tried when the keyword is unset.
+    ///
+    /// This keeps tues's existing order. OpenSSH's own default puts
+    /// keyboard-interactive ahead of password.
+    pub fn default_order() -> Vec<Self> {
+        vec![
+            AuthMethod::PublicKey,
+            AuthMethod::Password,
+            AuthMethod::KeyboardInteractive,
+        ]
+    }
+
+    /// Parse a comma-separated list. Unknown names are skipped. Duplicates
+    /// are dropped. An empty result means nothing in the list is usable.
+    pub fn parse_list(list: &str) -> Vec<Self> {
+        let mut out = Vec::new();
+        for part in list.split(',') {
+            let method = match part.trim().to_ascii_lowercase().as_str() {
+                "publickey" => AuthMethod::PublicKey,
+                "password" => AuthMethod::Password,
+                "keyboard-interactive" => AuthMethod::KeyboardInteractive,
+                _ => continue,
+            };
+            if !out.contains(&method) {
+                out.push(method);
+            }
+        }
+        out
+    }
+}
+
 /// Where to read `ssh_config` from.
 #[derive(Debug, Clone, Default)]
 pub enum SshConfigSource {
@@ -161,6 +204,8 @@ pub struct ConnectOptions {
     pub batch_mode: Option<bool>,
     /// `ConnectionAttempts`. `None` means unset (default 1).
     pub connection_attempts: Option<u32>,
+    /// `PreferredAuthentications`. `None` means the default order.
+    pub preferred_authentications: Option<Vec<AuthMethod>>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -366,6 +411,15 @@ impl ConnectOptions {
         self
     }
 
+    /// Order of `publickey`, `password`, and `keyboard-interactive`.
+    ///
+    /// Other OpenSSH method names are ignored. A list with none of the three
+    /// leaves authentication with nothing to try after the `none` probe.
+    pub fn preferred_authentications(mut self, list: impl AsRef<str>) -> Self {
+        self.preferred_authentications = Some(AuthMethod::parse_list(list.as_ref()));
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -509,6 +563,11 @@ impl ConnectOptions {
             ssh_config: config.cloned(),
             batch_mode: self.batch_mode.or(params.batch_mode).unwrap_or(false),
             connection_attempts,
+            preferred_authentications: self
+                .preferred_authentications
+                .clone()
+                .or(params.preferred_authentications.clone())
+                .unwrap_or_else(AuthMethod::default_order),
         })
     }
 }
@@ -558,6 +617,8 @@ pub struct ResolvedOptions {
     pub batch_mode: bool,
     /// TCP connect attempts. Authentication is not retried.
     pub connection_attempts: u32,
+    /// Authentication methods after the initial `none` probe, in try order.
+    pub preferred_authentications: Vec<AuthMethod>,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -616,6 +677,7 @@ impl ResolvedOptions {
             password_manager: Some(self.password_manager.clone()),
             batch_mode: Some(self.batch_mode),
             connection_attempts: Some(self.connection_attempts),
+            preferred_authentications: Some(self.preferred_authentications.clone()),
         }
     }
 }
@@ -901,6 +963,46 @@ mod tests {
                 .resolve()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn preferred_authentications_order_and_unknown_names() {
+        assert_eq!(
+            AuthMethod::parse_list("password, publickey, gssapi-with-mic, password"),
+            vec![AuthMethod::Password, AuthMethod::PublicKey]
+        );
+        assert!(AuthMethod::parse_list("gssapi-with-mic,hostbased").is_empty());
+
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert_eq!(
+            defaults.preferred_authentications,
+            AuthMethod::default_order()
+        );
+
+        let cfg = SshConfig::parse_str(
+            "Host *\n PreferredAuthentications password,publickey\n",
+            None,
+        )
+        .unwrap();
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(
+            from_config.preferred_authentications,
+            vec![AuthMethod::Password, AuthMethod::PublicKey]
+        );
+        let forced = ConnectOptions::new("h")
+            .preferred_authentications("keyboard-interactive")
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(
+            forced.preferred_authentications,
+            vec![AuthMethod::KeyboardInteractive]
+        );
+        let none_usable = ConnectOptions::new("h")
+            .preferred_authentications("hostbased")
+            .no_ssh_config()
+            .resolve()
+            .unwrap();
+        assert!(none_usable.preferred_authentications.is_empty());
     }
 
     use std::sync::Arc;

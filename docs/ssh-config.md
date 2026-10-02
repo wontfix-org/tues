@@ -48,7 +48,7 @@ up. A fan-out runner hits them as often as an interactive client does.
 |---|---|---|---|
 | `BatchMode` | 1 | done | `yes` refuses a password manager that would prompt, including sudo. A password the manager already has is still used. |
 | `ConnectionAttempts` | 1 | done | Retries the TCP connect, one second apart. Authentication is not retried. `0` is rejected. The default is 1. |
-| `PreferredAuthentications` | 1 | not started | Reorder the methods tues already tries. Configs use this to force `publickey` and to keep a password prompt off a host that should never ask. |
+| `PreferredAuthentications` | 1 | done | Reorders `publickey`, `password`, and `keyboard-interactive`. `gssapi-with-mic` and `hostbased` are skipped. Unset keeps publickey, then password, then keyboard-interactive. |
 | `SetEnv` | 1 | not started | `Channel::set_env` before exec. Literal `NAME=value` from the config, applied to every command on that host. |
 | `TCPKeepAlive` | 1 | not started | `SO_KEEPALIVE` on the socket. Complements `ServerAliveInterval` for half-open connections. |
 | `CertificateFile` | 2 | not started | `authenticate_openssh_cert` exists. The work is pairing each certificate with its key and honoring `IdentitiesOnly`. Cert fleets put this in config. |

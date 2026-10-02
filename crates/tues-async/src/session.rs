@@ -695,155 +695,177 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &ResolvedOptions
         _ => {}
     }
 
-    // SSH agent.
-    if opts.pubkey_authentication && opts.use_agent && !opts.identities_only {
-        match AgentClient::connect_env().await {
-            Ok(mut agent) => match agent.request_identities().await {
-                Ok(ids) => {
-                    for id in ids {
-                        let AgentIdentity::PublicKey { key, comment } = id else {
-                            continue;
-                        };
-                        tried.push(format!("agent key {comment}"));
-                        let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
-                        match handle
-                            .authenticate_publickey_with(login_user.clone(), key, hash, &mut agent)
-                            .await
-                        {
-                            Ok(r) if r.success() => return Ok(()),
-                            Ok(_) => {}
-                            Err(e) => debug!("agent auth error: {e}"),
-                        }
-                    }
-                }
-                Err(e) => debug!("agent identities unavailable: {e}"),
-            },
-            Err(e) => debug!("no ssh agent: {e}"),
-        }
-    }
-
-    // Identity files.
-    if opts.pubkey_authentication {
-        for path in &opts.identity_files {
-            if !path.is_file() {
-                continue;
-            }
-            tried.push(format!("key {}", path.display()));
-            let key = match load_identity(path, opts).await {
-                Ok(k) => k,
-                Err(e) => {
-                    debug!(path = %path.display(), "skipping identity: {e}");
-                    continue;
-                }
-            };
-            let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
-            let r = handle
-                .authenticate_publickey(
-                    login_user.clone(),
-                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-                )
-                .await
-                .map_err(proto)?;
-            if r.success() {
-                return Ok(());
-            }
-        }
-    }
-
-    // Password.
-    if opts.password_authentication {
-        let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
-        for attempt in 0..3u32 {
-            tried.push("password".into());
-            let pw = match request_password(
-                &opts.password_manager,
-                req.clone(),
-                attempt > 0,
-                opts.batch_mode,
-            )
-            .await
-            {
-                Ok(pw) => pw,
-                Err(e) => {
-                    debug!("no login password: {e}");
-                    break;
-                }
-            };
-            use tues_core::ExposeSecret;
-            let r = handle
-                .authenticate_password(login_user.clone(), pw.expose_secret().to_string())
-                .await
-                .map_err(proto)?;
-            if r.success() {
-                return Ok(());
-            }
-            if let russh::client::AuthResult::Failure {
-                remaining_methods, ..
-            } = &r
-                && !remaining_methods.contains(&russh::MethodKind::Password)
-            {
-                break;
-            }
-        }
-    }
-
-    // Keyboard-interactive, answering every prompt with the login password.
-    if opts.kbd_interactive_authentication {
-        let req = PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
-        'outer: for attempt in 0..3u32 {
-            let mut resp = handle
-                .authenticate_keyboard_interactive_start(login_user.clone(), None)
-                .await
-                .map_err(proto)?;
-            let mut pw: Option<SecretString> = None;
-            loop {
-                match resp {
-                    KeyboardInteractiveAuthResponse::Success => return Ok(()),
-                    KeyboardInteractiveAuthResponse::Failure {
-                        remaining_methods, ..
-                    } => {
-                        tried.push("keyboard-interactive".into());
-                        if !remaining_methods.contains(&russh::MethodKind::KeyboardInteractive)
-                            || pw.is_none()
-                        {
-                            break 'outer;
-                        }
-                        break;
-                    }
-                    KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                        let mut answers = Vec::with_capacity(prompts.len());
-                        for p in &prompts {
-                            if p.echo {
-                                answers.push(String::new());
-                            } else {
-                                if pw.is_none() {
-                                    match request_password(
-                                        &opts.password_manager,
-                                        req.clone(),
-                                        attempt > 0,
-                                        opts.batch_mode,
-                                    )
-                                    .await
+    for method in &opts.preferred_authentications {
+        match method {
+            tues_core::AuthMethod::PublicKey => {
+                // SSH agent.
+                if opts.pubkey_authentication && opts.use_agent && !opts.identities_only {
+                    match AgentClient::connect_env().await {
+                        Ok(mut agent) => match agent.request_identities().await {
+                            Ok(ids) => {
+                                for id in ids {
+                                    let AgentIdentity::PublicKey { key, comment } = id else {
+                                        continue;
+                                    };
+                                    tried.push(format!("agent key {comment}"));
+                                    let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
+                                    match handle
+                                        .authenticate_publickey_with(
+                                            login_user.clone(),
+                                            key,
+                                            hash,
+                                            &mut agent,
+                                        )
+                                        .await
                                     {
-                                        Ok(p) => pw = Some(p),
-                                        Err(e) => {
-                                            debug!("no login password: {e}");
-                                            break 'outer;
-                                        }
+                                        Ok(r) if r.success() => return Ok(()),
+                                        Ok(_) => {}
+                                        Err(e) => debug!("agent auth error: {e}"),
                                     }
                                 }
-                                use tues_core::ExposeSecret;
-                                answers.push(
-                                    pw.as_ref()
-                                        .map(|p| p.expose_secret().to_string())
-                                        .unwrap_or_default(),
-                                );
                             }
+                            Err(e) => debug!("agent identities unavailable: {e}"),
+                        },
+                        Err(e) => debug!("no ssh agent: {e}"),
+                    }
+                }
+
+                // Identity files.
+                if opts.pubkey_authentication {
+                    for path in &opts.identity_files {
+                        if !path.is_file() {
+                            continue;
                         }
-                        resp = handle
-                            .authenticate_keyboard_interactive_respond(answers)
+                        tried.push(format!("key {}", path.display()));
+                        let key = match load_identity(path, opts).await {
+                            Ok(k) => k,
+                            Err(e) => {
+                                debug!(path = %path.display(), "skipping identity: {e}");
+                                continue;
+                            }
+                        };
+                        let hash = rsa_hash(handle, key.algorithm().is_rsa()).await;
+                        let r = handle
+                            .authenticate_publickey(
+                                login_user.clone(),
+                                PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                            )
                             .await
                             .map_err(proto)?;
+                        if r.success() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            tues_core::AuthMethod::Password => {
+                // Password.
+                if opts.password_authentication {
+                    let req =
+                        PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
+                    for attempt in 0..3u32 {
+                        tried.push("password".into());
+                        let pw = match request_password(
+                            &opts.password_manager,
+                            req.clone(),
+                            attempt > 0,
+                            opts.batch_mode,
+                        )
+                        .await
+                        {
+                            Ok(pw) => pw,
+                            Err(e) => {
+                                debug!("no login password: {e}");
+                                break;
+                            }
+                        };
+                        use tues_core::ExposeSecret;
+                        let r = handle
+                            .authenticate_password(
+                                login_user.clone(),
+                                pw.expose_secret().to_string(),
+                            )
+                            .await
+                            .map_err(proto)?;
+                        if r.success() {
+                            return Ok(());
+                        }
+                        if let russh::client::AuthResult::Failure {
+                            remaining_methods, ..
+                        } = &r
+                            && !remaining_methods.contains(&russh::MethodKind::Password)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            tues_core::AuthMethod::KeyboardInteractive => {
+                // Keyboard-interactive, answering every prompt with the login password.
+                if opts.kbd_interactive_authentication {
+                    let req =
+                        PasswordRequest::login(opts.alias.clone(), opts.port, login_user.clone());
+                    'outer: for attempt in 0..3u32 {
+                        let mut resp = handle
+                            .authenticate_keyboard_interactive_start(login_user.clone(), None)
+                            .await
+                            .map_err(proto)?;
+                        let mut pw: Option<SecretString> = None;
+                        loop {
+                            match resp {
+                                KeyboardInteractiveAuthResponse::Success => return Ok(()),
+                                KeyboardInteractiveAuthResponse::Failure {
+                                    remaining_methods,
+                                    ..
+                                } => {
+                                    tried.push("keyboard-interactive".into());
+                                    if !remaining_methods
+                                        .contains(&russh::MethodKind::KeyboardInteractive)
+                                        || pw.is_none()
+                                    {
+                                        break 'outer;
+                                    }
+                                    break;
+                                }
+                                KeyboardInteractiveAuthResponse::InfoRequest {
+                                    prompts, ..
+                                } => {
+                                    let mut answers = Vec::with_capacity(prompts.len());
+                                    for p in &prompts {
+                                        if p.echo {
+                                            answers.push(String::new());
+                                        } else {
+                                            if pw.is_none() {
+                                                match request_password(
+                                                    &opts.password_manager,
+                                                    req.clone(),
+                                                    attempt > 0,
+                                                    opts.batch_mode,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(p) => pw = Some(p),
+                                                    Err(e) => {
+                                                        debug!("no login password: {e}");
+                                                        break 'outer;
+                                                    }
+                                                }
+                                            }
+                                            use tues_core::ExposeSecret;
+                                            answers.push(
+                                                pw.as_ref()
+                                                    .map(|p| p.expose_secret().to_string())
+                                                    .unwrap_or_default(),
+                                            );
+                                        }
+                                    }
+                                    resp = handle
+                                        .authenticate_keyboard_interactive_respond(answers)
+                                        .await
+                                        .map_err(proto)?;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -883,9 +905,13 @@ async fn load_identity(path: &Path, opts: &ResolvedOptions) -> Result<PrivateKey
     );
     debug_assert_eq!(req.kind, PasswordKind::KeyPassphrase);
     for attempt in 0..3u32 {
-        let pw =
-            request_password(&opts.password_manager, req.clone(), attempt > 0, opts.batch_mode)
-                .await?;
+        let pw = request_password(
+            &opts.password_manager,
+            req.clone(),
+            attempt > 0,
+            opts.batch_mode,
+        )
+        .await?;
         use tues_core::ExposeSecret;
         match load_secret_key(path, Some(pw.expose_secret())) {
             Ok(k) => return Ok(k),

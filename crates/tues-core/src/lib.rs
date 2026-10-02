@@ -26,7 +26,9 @@ pub use bytes::Bytes;
 pub use error::{Error, Result, SudoError};
 pub use exec::{Effect, Event, ExecMachine};
 pub use fs::{DirEntry, FileType, Metadata, OpenOptions};
-pub use options::{ConnectOptions, HostKeyPolicy, JumpHost, ResolvedOptions, SshConfigSource};
+pub use options::{
+    AuthMethod, ConnectOptions, HostKeyPolicy, JumpHost, ResolvedOptions, SshConfigSource,
+};
 pub use password::{
     MemoizingPasswordManager, NoPasswordManager, PasswordKind, PasswordManager, PasswordPrompter,
     PasswordRequest, SharedPasswordManager, StaticPasswordManager, TtyPrompter, shared,
