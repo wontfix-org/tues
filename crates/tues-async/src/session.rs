@@ -655,8 +655,29 @@ async fn tcp_connect_once(opts: &ResolvedOptions) -> Result<TcpStream> {
         })?,
     };
     let _ = stream.set_nodelay(true);
+    if opts.tcp_keepalive {
+        set_tcp_keepalive(&stream);
+    }
     Ok(stream)
 }
+
+#[cfg(unix)]
+fn set_tcp_keepalive(stream: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let on: libc::c_int = 1;
+    let _ = unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_KEEPALIVE,
+            &on as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of_val(&on) as libc::socklen_t,
+        )
+    };
+}
+
+#[cfg(not(unix))]
+fn set_tcp_keepalive(_stream: &TcpStream) {}
 
 /// Ask the password manager off the executor.
 pub(crate) async fn request_password(
@@ -1103,5 +1124,28 @@ mod tests {
         let pw = request_password(&known, req, false, true).await.unwrap();
         use tues_core::ExposeSecret;
         assert_eq!(pw.expose_secret(), "secret");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tcp_keepalive_sets_so_keepalive() {
+        use std::os::fd::AsRawFd;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        set_tcp_keepalive(&stream);
+        let mut val: libc::c_int = 0;
+        let mut len = std::mem::size_of_val(&val) as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_KEEPALIVE,
+                &mut val as *mut libc::c_int as *mut libc::c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(val, 1);
     }
 }

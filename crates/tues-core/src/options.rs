@@ -208,6 +208,8 @@ pub struct ConnectOptions {
     pub preferred_authentications: Option<Vec<AuthMethod>>,
     /// `SetEnv` assignments. The builder's names win over `ssh_config`.
     pub set_env: Vec<(String, String)>,
+    /// `TCPKeepAlive`. `None` means unset (OpenSSH default is yes).
+    pub tcp_keepalive: Option<bool>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -430,6 +432,16 @@ impl ConnectOptions {
         self
     }
 
+    /// Set `SO_KEEPALIVE` on the TCP socket (`TCPKeepAlive`).
+    ///
+    /// The default is yes, matching OpenSSH. A connection made through
+    /// `ProxyJump` is not a TCP socket, so the option applies to each hop's
+    /// own TCP connection.
+    pub fn tcp_keepalive(mut self, yes: bool) -> Self {
+        self.tcp_keepalive = Some(yes);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -587,6 +599,7 @@ impl ConnectOptions {
                 .or(params.preferred_authentications.clone())
                 .unwrap_or_else(AuthMethod::default_order),
             set_env,
+            tcp_keepalive: self.tcp_keepalive.or(params.tcp_keepalive).unwrap_or(true),
         })
     }
 }
@@ -640,6 +653,8 @@ pub struct ResolvedOptions {
     pub preferred_authentications: Vec<AuthMethod>,
     /// Environment variables sent on each session channel before exec.
     pub set_env: Vec<(String, String)>,
+    /// `SO_KEEPALIVE` on the direct TCP socket. Default yes.
+    pub tcp_keepalive: bool,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -702,6 +717,7 @@ impl ResolvedOptions {
             // The jump only forwards a socket. Its own config supplies SetEnv
             // if a later exec on that hop needs it.
             set_env: Vec::new(),
+            tcp_keepalive: Some(self.tcp_keepalive),
         }
     }
 }
@@ -1040,6 +1056,20 @@ mod tests {
             r.set_env,
             vec![("A".into(), "api".into()), ("B".into(), "fromcfg".into())]
         );
+    }
+
+    #[test]
+    fn tcp_keepalive_defaults_on() {
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert!(defaults.tcp_keepalive);
+        let cfg = SshConfig::parse_str("Host *\n TCPKeepAlive no\n", None).unwrap();
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert!(!from_config.tcp_keepalive);
+        let forced = ConnectOptions::new("h")
+            .tcp_keepalive(true)
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert!(forced.tcp_keepalive);
     }
 
     use std::sync::Arc;

@@ -132,6 +132,8 @@ pub struct HostParams {
     pub preferred_authentications: Option<Vec<AuthMethod>>,
     /// `SetEnv` variables. Names accumulate; the first value for a name wins.
     pub set_env: Vec<(String, String)>,
+    /// `TCPKeepAlive`. `None` means the directive was not set (default yes).
+    pub tcp_keepalive: Option<bool>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -417,6 +419,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             p.preferred_authentications,
             Some(AuthMethod::parse_list(value))
         ),
+        "tcpkeepalive" => first!(p.tcp_keepalive, yes_no(value)),
         "setenv" => {
             for word in split_words(value) {
                 let Some((name, val)) = word.split_once('=') else {
