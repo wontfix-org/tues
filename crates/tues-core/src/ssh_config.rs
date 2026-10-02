@@ -136,6 +136,8 @@ pub struct HostParams {
     pub tcp_keepalive: Option<bool>,
     /// `NumberOfPasswordPrompts`. `None` means the directive was not set (default 3).
     pub password_prompts: Option<u32>,
+    /// `NoHostAuthenticationForLocalhost`. `None` means unset (default no).
+    pub no_host_auth_localhost: Option<bool>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -423,6 +425,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         ),
         "tcpkeepalive" => first!(p.tcp_keepalive, yes_no(value)),
         "numberofpasswordprompts" => first!(p.password_prompts, value.parse().ok()),
+        "nohostauthenticationforlocalhost" => first!(p.no_host_auth_localhost, yes_no(value)),
         "setenv" => {
             for word in split_words(value) {
                 let Some((name, val)) = word.split_once('=') else {

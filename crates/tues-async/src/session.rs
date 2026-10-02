@@ -82,6 +82,7 @@ impl Session {
             policy: opts.host_key_policy,
             user_known_hosts: opts.known_hosts_files.clone(),
             global_known_hosts: opts.global_known_hosts_files.clone(),
+            no_host_auth_localhost: opts.no_host_auth_localhost,
         };
 
         let connect_err = |e: russh::Error| map_connect_error(e, &opts);
@@ -513,12 +514,27 @@ pub(crate) struct ClientHandler {
     /// `GlobalKnownHostsFile`. Consulted only when the user files do not
     /// mention the host, and never written.
     global_known_hosts: Vec<PathBuf>,
+    /// `NoHostAuthenticationForLocalhost`.
+    no_host_auth_localhost: bool,
 }
 
 enum HostKeySeen {
     Match,
     Changed { line: usize },
     Absent,
+}
+
+/// `localhost` and a loopback address, including `[::1]`.
+fn is_localhost_name(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Search `files` for `key`. A match wins over a changed key in a later file.
@@ -555,6 +571,9 @@ impl client::Handler for ClientHandler {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             PublicKeyOrCertificate::Certificate(cert) => PublicKey::from(cert.public_key().clone()),
         };
+        if self.no_host_auth_localhost && is_localhost_name(&self.host) {
+            return Ok(true);
+        }
         match self.policy {
             HostKeyPolicy::Off => Ok(true),
             HostKeyPolicy::Strict | HostKeyPolicy::AcceptNew => {
@@ -1038,6 +1057,7 @@ mod tests {
             policy,
             user_known_hosts: vec![user],
             global_known_hosts: vec![global],
+            no_host_auth_localhost: false,
         }
     }
 
@@ -1147,5 +1167,35 @@ mod tests {
         };
         assert_eq!(rc, 0);
         assert_eq!(val, 1);
+    }
+
+    #[tokio::test]
+    async fn localhost_skips_host_key_check_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("tues-local-hk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("user");
+        let global = dir.join("global");
+        std::fs::write(&user, "").unwrap();
+        std::fs::write(&global, "").unwrap();
+
+        let mut local = handler(user.clone(), global.clone(), HostKeyPolicy::Strict);
+        local.host = "localhost".into();
+        local.no_host_auth_localhost = true;
+        assert!(check(&mut local, RIGHT).await.unwrap());
+
+        local.host = "[::1]".into();
+        assert!(check(&mut local, RIGHT).await.unwrap());
+
+        local.host = "box.example".into();
+        let err = check(&mut local, RIGHT).await.unwrap_err();
+        assert!(matches!(err, russh::Error::UnknownKey));
+
+        local.host = "127.0.0.1".into();
+        local.no_host_auth_localhost = false;
+        let err = check(&mut local, RIGHT).await.unwrap_err();
+        assert!(matches!(err, russh::Error::UnknownKey));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

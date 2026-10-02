@@ -212,6 +212,8 @@ pub struct ConnectOptions {
     pub tcp_keepalive: Option<bool>,
     /// `NumberOfPasswordPrompts`. `None` means unset (default 3). `0` asks never.
     pub password_prompts: Option<u32>,
+    /// `NoHostAuthenticationForLocalhost`. `None` means unset (default no).
+    pub no_host_auth_localhost: Option<bool>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -452,6 +454,12 @@ impl ConnectOptions {
         self
     }
 
+    /// Skip host-key checks when the host is localhost (`NoHostAuthenticationForLocalhost`).
+    pub fn no_host_authentication_for_localhost(mut self, yes: bool) -> Self {
+        self.no_host_auth_localhost = Some(yes);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -614,6 +622,10 @@ impl ConnectOptions {
                 .password_prompts
                 .or(params.password_prompts)
                 .unwrap_or(3),
+            no_host_auth_localhost: self
+                .no_host_auth_localhost
+                .or(params.no_host_auth_localhost)
+                .unwrap_or(false),
         })
     }
 }
@@ -671,6 +683,8 @@ pub struct ResolvedOptions {
     pub tcp_keepalive: bool,
     /// Password, keyboard-interactive, and key-passphrase attempts.
     pub password_prompts: u32,
+    /// Skip host-key checks for a localhost destination.
+    pub no_host_auth_localhost: bool,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -735,6 +749,7 @@ impl ResolvedOptions {
             set_env: Vec::new(),
             tcp_keepalive: Some(self.tcp_keepalive),
             password_prompts: Some(self.password_prompts),
+            no_host_auth_localhost: Some(self.no_host_auth_localhost),
         }
     }
 }
@@ -1101,6 +1116,18 @@ mod tests {
             .resolve_with(Some(&cfg))
             .unwrap();
         assert_eq!(none.password_prompts, 0);
+    }
+
+    #[test]
+    fn no_host_auth_localhost_defaults_off() {
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert!(!defaults.no_host_auth_localhost);
+        let cfg =
+            SshConfig::parse_str("Host *\n NoHostAuthenticationForLocalhost yes\n", None).unwrap();
+        let from_config = ConnectOptions::new("localhost")
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert!(from_config.no_host_auth_localhost);
     }
 
     use std::sync::Arc;
