@@ -206,6 +206,8 @@ pub struct ConnectOptions {
     pub connection_attempts: Option<u32>,
     /// `PreferredAuthentications`. `None` means the default order.
     pub preferred_authentications: Option<Vec<AuthMethod>>,
+    /// `SetEnv` assignments. The builder's names win over `ssh_config`.
+    pub set_env: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -420,6 +422,14 @@ impl ConnectOptions {
         self
     }
 
+    /// Send `name=value` to the remote session before exec (`SetEnv`).
+    ///
+    /// Repeat the call for several variables. The first value for a name wins.
+    pub fn set_env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.set_env.push((name.into(), value.into()));
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -486,6 +496,14 @@ impl ConnectOptions {
             .password_manager
             .clone()
             .unwrap_or_else(|| shared(MemoizingPasswordManager::new(TtyPrompter)));
+
+        let mut set_env = self.set_env.clone();
+        for (name, value) in &params.set_env {
+            if set_env.iter().any(|(existing, _)| existing == name) {
+                continue;
+            }
+            set_env.push((name.clone(), value.clone()));
+        }
 
         let connection_attempts = self
             .connection_attempts
@@ -568,6 +586,7 @@ impl ConnectOptions {
                 .clone()
                 .or(params.preferred_authentications.clone())
                 .unwrap_or_else(AuthMethod::default_order),
+            set_env,
         })
     }
 }
@@ -619,6 +638,8 @@ pub struct ResolvedOptions {
     pub connection_attempts: u32,
     /// Authentication methods after the initial `none` probe, in try order.
     pub preferred_authentications: Vec<AuthMethod>,
+    /// Environment variables sent on each session channel before exec.
+    pub set_env: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -678,6 +699,9 @@ impl ResolvedOptions {
             batch_mode: Some(self.batch_mode),
             connection_attempts: Some(self.connection_attempts),
             preferred_authentications: Some(self.preferred_authentications.clone()),
+            // The jump only forwards a socket. Its own config supplies SetEnv
+            // if a later exec on that hop needs it.
+            set_env: Vec::new(),
         }
     }
 }
@@ -1003,6 +1027,19 @@ mod tests {
             .resolve()
             .unwrap();
         assert!(none_usable.preferred_authentications.is_empty());
+    }
+
+    #[test]
+    fn set_env_builder_wins_per_name() {
+        let cfg = SshConfig::parse_str("Host *\n SetEnv A=cfg B=fromcfg\n", None).unwrap();
+        let r = ConnectOptions::new("h")
+            .set_env("A", "api")
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(
+            r.set_env,
+            vec![("A".into(), "api".into()), ("B".into(), "fromcfg".into())]
+        );
     }
 
     use std::sync::Arc;

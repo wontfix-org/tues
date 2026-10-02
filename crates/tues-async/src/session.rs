@@ -222,6 +222,7 @@ impl Session {
             .channel_open_session()
             .await
             .map_err(map_channel_error)?;
+        apply_set_env(&channel, &opts.set_env).await?;
         if let Some(pty) = &plan.pty {
             channel
                 .request_pty(true, &pty.term, pty.cols, pty.rows, 0, 0, &[])
@@ -316,6 +317,7 @@ impl Session {
             .channel_open_session()
             .await
             .map_err(map_channel_error)?;
+        apply_set_env(&channel, &self.inner.opts.set_env).await?;
         channel
             .request_subsystem(true, "sftp")
             .await
@@ -348,6 +350,7 @@ impl Session {
             .channel_open_session()
             .await
             .map_err(map_channel_error)?;
+        apply_set_env(&channel, &opts.set_env).await?;
         channel
             .exec(true, plan.command_line.as_bytes().to_vec())
             .await
@@ -590,6 +593,23 @@ impl client::Handler for ClientHandler {
 // ---------------------------------------------------------------------------
 // Authentication
 // ---------------------------------------------------------------------------
+
+/// Send `SetEnv` before exec or a subsystem request.
+///
+/// `want_reply` is false so a server that does not accept the variable does
+/// not fail the channel.
+async fn apply_set_env(
+    channel: &russh::Channel<russh::client::Msg>,
+    env: &[(String, String)],
+) -> Result<()> {
+    for (name, value) in env {
+        channel
+            .set_env(false, name.as_str(), value.as_str())
+            .await
+            .map_err(map_channel_error)?;
+    }
+    Ok(())
+}
 
 /// TCP connect, retried `ConnectionAttempts` times with one second between
 /// failures. A refused or timed-out socket is retried. Authentication is not.

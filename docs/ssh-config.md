@@ -49,7 +49,7 @@ up. A fan-out runner hits them as often as an interactive client does.
 | `BatchMode` | 1 | done | `yes` refuses a password manager that would prompt, including sudo. A password the manager already has is still used. |
 | `ConnectionAttempts` | 1 | done | Retries the TCP connect, one second apart. Authentication is not retried. `0` is rejected. The default is 1. |
 | `PreferredAuthentications` | 1 | done | Reorders `publickey`, `password`, and `keyboard-interactive`. `gssapi-with-mic` and `hostbased` are skipped. Unset keeps publickey, then password, then keyboard-interactive. |
-| `SetEnv` | 1 | not started | `Channel::set_env` before exec. Literal `NAME=value` from the config, applied to every command on that host. |
+| `SetEnv` | 1 | done | Sent on the session channel before exec and before the SFTP subsystem. Names accumulate; the first value wins. A server that rejects the variable does not fail the command. |
 | `TCPKeepAlive` | 1 | not started | `SO_KEEPALIVE` on the socket. Complements `ServerAliveInterval` for half-open connections. |
 | `CertificateFile` | 2 | not started | `authenticate_openssh_cert` exists. The work is pairing each certificate with its key and honoring `IdentitiesOnly`. Cert fleets put this in config. |
 | `IdentityAgent` | 2 | not started | Point the agent client at a socket other than `SSH_AUTH_SOCK`, or `none` to disable it. Per-host agents are normal in configs. |

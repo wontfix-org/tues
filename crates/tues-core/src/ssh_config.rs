@@ -130,6 +130,8 @@ pub struct HostParams {
     /// `PreferredAuthentications`. `None` means the directive was not set.
     /// An empty list means the directive named no method tues can try.
     pub preferred_authentications: Option<Vec<AuthMethod>>,
+    /// `SetEnv` variables. Names accumulate; the first value for a name wins.
+    pub set_env: Vec<(String, String)>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -292,6 +294,15 @@ impl SshConfig {
             .iter()
             .map(|k| expand_known_hosts_path(k, host, &hostname, &login_user, port))
             .collect();
+        p.set_env = std::mem::take(&mut p.set_env)
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    name,
+                    expand_tokens(&value, host, &hostname, &login_user, port),
+                )
+            })
+            .collect();
         if let Some(files) = p.global_known_hosts_file.take() {
             p.global_known_hosts_file = Some(
                 files
@@ -406,6 +417,17 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             p.preferred_authentications,
             Some(AuthMethod::parse_list(value))
         ),
+        "setenv" => {
+            for word in split_words(value) {
+                let Some((name, val)) = word.split_once('=') else {
+                    continue;
+                };
+                if !is_env_name(name) || p.set_env.iter().any(|(n, _)| n == name) {
+                    continue;
+                }
+                p.set_env.push((name.to_string(), val.to_string()));
+            }
+        }
         "requesttty" => first!(
             p.request_tty,
             match value.to_ascii_lowercase().as_str() {
@@ -416,6 +438,15 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         ),
         _ => p.unknown.push((key.to_string(), value.to_string())),
     }
+}
+
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn yes_no(v: &str) -> Option<bool> {
@@ -811,5 +842,30 @@ Host zero
         let cfg = SshConfig::parse_str(text, None).unwrap();
         assert_eq!(cfg.query("web").connection_attempts, Some(4));
         assert_eq!(cfg.query("zero").connection_attempts, None);
+    }
+
+    #[test]
+    fn set_env_accumulates_and_keeps_the_first_value() {
+        let text = "\
+Host web
+  SetEnv A=web C=%h
+  SetEnv A=later D=\"x y\" BAD 1NO=z
+Host *
+  SetEnv A=star B=two
+";
+        let cfg = SshConfig::parse_str(text, None).unwrap();
+        assert_eq!(
+            cfg.query("web").set_env,
+            vec![
+                ("A".into(), "web".into()),
+                ("C".into(), "web".into()),
+                ("D".into(), "x y".into()),
+                ("B".into(), "two".into()),
+            ]
+        );
+        assert_eq!(
+            cfg.query("other").set_env,
+            vec![("A".into(), "star".into()), ("B".into(), "two".into())]
+        );
     }
 }
