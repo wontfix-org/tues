@@ -4,7 +4,8 @@
 //! (with globbing in the last path component), `Match all`, and the client
 //! options `tues` understands, including the transport keywords
 //! `ServerAliveCountMax`, `Ciphers`, `MACs`, `KexAlgorithms`,
-//! `HostKeyAlgorithms`, and `RekeyLimit`. Unknown directives are retained in
+//! `HostKeyAlgorithms`, and `RekeyLimit`, and `GlobalKnownHostsFile`.
+//! Unknown directives are retained in
 //! [`HostParams::unknown`] so a normal config still loads. Other `Match`
 //! blocks are skipped.
 //!
@@ -99,6 +100,9 @@ pub struct HostParams {
     /// Every file named by the first `UserKnownHostsFile` directive. Empty
     /// means the directive was not set.
     pub user_known_hosts_file: Vec<PathBuf>,
+    /// Files named by the first `GlobalKnownHostsFile` directive.
+    /// `None` means the directive was not set. `Some` empty is `none`.
+    pub global_known_hosts_file: Option<Vec<PathBuf>>,
     pub connect_timeout: Option<Duration>,
     pub server_alive_interval: Option<Duration>,
     /// `ServerAliveCountMax`. `None` means the directive was not set.
@@ -279,13 +283,37 @@ impl SshConfig {
         p.user_known_hosts_file = p
             .user_known_hosts_file
             .iter()
-            .map(|k| {
-                let s = k.to_string_lossy();
-                expand_path(&expand_tokens(&s, host, &hostname, &login_user, port))
-            })
+            .map(|k| expand_known_hosts_path(k, host, &hostname, &login_user, port))
             .collect();
+        if let Some(files) = p.global_known_hosts_file.take() {
+            p.global_known_hosts_file = Some(
+                files
+                    .iter()
+                    .map(|k| expand_known_hosts_path(k, host, &hostname, &login_user, port))
+                    .collect(),
+            );
+        }
         p
     }
+}
+
+fn expand_known_hosts_path(
+    path: &Path,
+    alias: &str,
+    hostname: &str,
+    login_user: &str,
+    port: u16,
+) -> PathBuf {
+    let s = path.to_string_lossy();
+    expand_path(&expand_tokens(&s, alias, hostname, login_user, port))
+}
+
+/// OpenSSH's default `GlobalKnownHostsFile` list.
+pub fn default_global_known_hosts_files() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/etc/ssh/ssh_known_hosts"),
+        PathBuf::from("/etc/ssh/ssh_known_hosts2"),
+    ]
 }
 
 fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &str) {
@@ -321,6 +349,22 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
             if p.user_known_hosts_file.is_empty() {
                 p.user_known_hosts_file =
                     split_words(value).into_iter().map(PathBuf::from).collect();
+            }
+        }
+        // `none` is an empty list. Any other token named `none` is dropped.
+        "globalknownhostsfile" => {
+            if p.global_known_hosts_file.is_none() {
+                let words = split_words(value);
+                let paths = if words.iter().all(|w| w.eq_ignore_ascii_case("none")) {
+                    Vec::new()
+                } else {
+                    words
+                        .into_iter()
+                        .filter(|w| !w.eq_ignore_ascii_case("none"))
+                        .map(PathBuf::from)
+                        .collect()
+                };
+                p.global_known_hosts_file = Some(paths);
             }
         }
         "connecttimeout" => first!(
@@ -688,5 +732,41 @@ Host web
         assert_eq!(other.ciphers.as_deref(), Some("aes128-ctr,aes256-ctr"));
         let web_only = cfg.query("web");
         assert_eq!(web_only.ciphers.as_deref(), Some("aes128-ctr,aes256-ctr"));
+    }
+
+    #[test]
+    fn global_known_hosts_file_is_first_match_and_none_clears_it() {
+        let text = "\
+Host web
+  GlobalKnownHostsFile /etc/ssh/custom /etc/ssh/other
+  GlobalKnownHostsFile /etc/ssh/later
+Host nonebox
+  GlobalKnownHostsFile none
+Host tilde
+  GlobalKnownHostsFile ~/.ssh/system_known_hosts
+Host *
+  GlobalKnownHostsFile /etc/ssh/fallback
+";
+        let cfg = SshConfig::parse_str(text, None).unwrap();
+        assert_eq!(
+            cfg.query("web").global_known_hosts_file,
+            Some(vec![
+                PathBuf::from("/etc/ssh/custom"),
+                PathBuf::from("/etc/ssh/other")
+            ])
+        );
+        assert_eq!(
+            cfg.query("nonebox").global_known_hosts_file,
+            Some(Vec::new())
+        );
+        assert_eq!(
+            cfg.query("tilde").global_known_hosts_file,
+            Some(vec![home_dir().join(".ssh/system_known_hosts")])
+        );
+        assert_eq!(
+            cfg.query("other").global_known_hosts_file,
+            Some(vec![PathBuf::from("/etc/ssh/fallback")])
+        );
+        assert!(cfg.query("other").unknown.is_empty());
     }
 }

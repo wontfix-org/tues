@@ -80,7 +80,8 @@ impl Session {
             host: opts.host_name.clone(),
             port: opts.port,
             policy: opts.host_key_policy,
-            known_hosts: opts.known_hosts_files.clone(),
+            user_known_hosts: opts.known_hosts_files.clone(),
+            global_known_hosts: opts.global_known_hosts_files.clone(),
         };
 
         let connect_err = |e: russh::Error| map_connect_error(e, &opts);
@@ -518,7 +519,40 @@ pub(crate) struct ClientHandler {
     host: String,
     port: u16,
     policy: HostKeyPolicy,
-    known_hosts: Vec<PathBuf>,
+    /// `UserKnownHostsFile`. A new key is written to the first path.
+    user_known_hosts: Vec<PathBuf>,
+    /// `GlobalKnownHostsFile`. Consulted only when the user files do not
+    /// mention the host, and never written.
+    global_known_hosts: Vec<PathBuf>,
+}
+
+enum HostKeySeen {
+    Match,
+    Changed { line: usize },
+    Absent,
+}
+
+/// Search `files` for `key`. A match wins over a changed key in a later file.
+fn lookup_host_key(
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+    files: &[PathBuf],
+) -> std::result::Result<HostKeySeen, russh::Error> {
+    let mut changed = None;
+    for path in files {
+        match russh::keys::check_known_hosts_path(host, port, key, path) {
+            Ok(true) => return Ok(HostKeySeen::Match),
+            Ok(false) => {}
+            Err(russh::keys::Error::KeyChanged { line }) => changed = Some(line),
+            Err(russh::keys::Error::IO(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(match changed {
+        Some(line) => HostKeySeen::Changed { line },
+        None => HostKeySeen::Absent,
+    })
 }
 
 impl client::Handler for ClientHandler {
@@ -535,22 +569,24 @@ impl client::Handler for ClientHandler {
         match self.policy {
             HostKeyPolicy::Off => Ok(true),
             HostKeyPolicy::Strict | HostKeyPolicy::AcceptNew => {
-                let mut changed = None;
-                for path in &self.known_hosts {
-                    match russh::keys::check_known_hosts_path(&self.host, self.port, &key, path) {
-                        Ok(true) => return Ok(true),
-                        Ok(false) => {}
-                        Err(russh::keys::Error::KeyChanged { line }) => changed = Some(line),
-                        Err(russh::keys::Error::IO(e))
-                            if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e.into()),
+                // A changed key in a user file is final. The global files are
+                // only consulted when the user files do not mention this host.
+                match lookup_host_key(&self.host, self.port, &key, &self.user_known_hosts)? {
+                    HostKeySeen::Match => return Ok(true),
+                    HostKeySeen::Changed { line } => {
+                        return Err(russh::Error::KeyChanged { line });
                     }
+                    HostKeySeen::Absent => {}
                 }
-                if let Some(line) = changed {
-                    return Err(russh::Error::KeyChanged { line });
+                match lookup_host_key(&self.host, self.port, &key, &self.global_known_hosts)? {
+                    HostKeySeen::Match => return Ok(true),
+                    HostKeySeen::Changed { line } => {
+                        return Err(russh::Error::KeyChanged { line });
+                    }
+                    HostKeySeen::Absent => {}
                 }
                 if self.policy == HostKeyPolicy::AcceptNew {
-                    let Some(path) = self.known_hosts.first() else {
+                    let Some(path) = self.user_known_hosts.first() else {
                         return Err(russh::Error::UnknownKey);
                     };
                     warn!(host = %self.host, port = self.port, "adding new host key to {}", path.display());
@@ -857,5 +893,98 @@ fn sig_name(sig: &russh::Sig) -> String {
     match sig {
         russh::Sig::Custom(c) => c.clone(),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::client::Handler;
+    use russh::keys::PublicKeyOrCertificate;
+    use russh::keys::{HashAlg, PublicKey};
+
+    const RIGHT: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAoIklq5yCSn6F3wL5UfOaCzeTBwcAtrGXrBgd1goMPE";
+    const WRONG: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILMaDVVxNQwFJldz6Ol9xCq13sCcXGR2we7DpTeCxDXd";
+
+    fn key(openssh: &str) -> PublicKey {
+        PublicKey::from_openssh(openssh).unwrap()
+    }
+
+    fn write_host(path: &Path, host: &str, openssh: &str) {
+        std::fs::write(path, format!("{host} {openssh}\n")).unwrap();
+    }
+
+    fn handler(user: PathBuf, global: PathBuf, policy: HostKeyPolicy) -> ClientHandler {
+        ClientHandler {
+            host: "box.example".into(),
+            port: 22,
+            policy,
+            user_known_hosts: vec![user],
+            global_known_hosts: vec![global],
+        }
+    }
+
+    async fn check(
+        handler: &mut ClientHandler,
+        openssh: &str,
+    ) -> std::result::Result<bool, russh::Error> {
+        handler
+            .check_server_key(&PublicKeyOrCertificate::PublicKey {
+                key: key(openssh),
+                hash_alg: None::<HashAlg>,
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn global_file_is_used_only_when_the_user_file_does_not_mention_the_host() {
+        let dir = std::env::temp_dir().join(format!("tues-gkh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("user");
+        let global = dir.join("global");
+        write_host(&global, "box.example", RIGHT);
+        std::fs::write(&user, "").unwrap();
+
+        let mut strict = handler(user.clone(), global.clone(), HostKeyPolicy::Strict);
+        assert!(check(&mut strict, RIGHT).await.unwrap());
+
+        write_host(&user, "box.example", WRONG);
+        // Unreadable as a known_hosts line. A user-file match must not open it.
+        std::fs::write(&global, "not a known_hosts file\n").unwrap();
+        assert!(check(&mut strict, WRONG).await.unwrap());
+
+        write_host(&global, "box.example", RIGHT);
+        let err = check(&mut strict, RIGHT).await.unwrap_err();
+        assert!(matches!(err, russh::Error::KeyChanged { .. }));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn accept_new_appends_to_the_user_file_only() {
+        let dir = std::env::temp_dir().join(format!("tues-gkh-learn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("user");
+        let global = dir.join("global");
+        std::fs::write(&user, "").unwrap();
+        std::fs::write(&global, "").unwrap();
+        let mut learning = handler(user.clone(), global.clone(), HostKeyPolicy::AcceptNew);
+        assert!(check(&mut learning, RIGHT).await.unwrap());
+        assert!(
+            std::fs::read_to_string(&user)
+                .unwrap()
+                .contains("box.example")
+        );
+        assert!(std::fs::read_to_string(&global).unwrap().is_empty());
+
+        learning.user_known_hosts.clear();
+        let err = check(&mut learning, WRONG).await.unwrap_err();
+        assert!(matches!(err, russh::Error::UnknownKey));
+        assert!(std::fs::read_to_string(&global).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

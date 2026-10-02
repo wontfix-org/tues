@@ -99,6 +99,13 @@ fn split_host_port(s: &str) -> Result<(String, Option<u16>)> {
     Ok((s.to_string(), None))
 }
 
+fn expand_known_hosts_list(files: &[PathBuf]) -> Vec<PathBuf> {
+    files
+        .iter()
+        .map(|p| ssh_config::expand_path(&p.to_string_lossy()))
+        .collect()
+}
+
 fn parse_port(p: &str) -> Result<u16> {
     p.parse()
         .map_err(|_| Error::Config(format!("invalid port {p:?}")))
@@ -139,9 +146,12 @@ pub struct ConnectOptions {
     pub kbd_interactive_authentication: Option<bool>,
     pub use_agent: Option<bool>,
     pub host_key_policy: Option<HostKeyPolicy>,
-    /// Explicit known_hosts files, replacing ssh_config and the default.
-    /// `None` consults `UserKnownHostsFile`, then `~/.ssh/known_hosts`.
+    /// Explicit user known_hosts files, replacing `UserKnownHostsFile` and
+    /// `~/.ssh/known_hosts`. Does not replace `GlobalKnownHostsFile`.
     pub known_hosts_file: Option<Vec<PathBuf>>,
+    /// Explicit `GlobalKnownHostsFile` list. `None` uses ssh_config, then
+    /// `/etc/ssh/ssh_known_hosts` and `ssh_known_hosts2`. `Some` empty is `none`.
+    pub global_known_hosts_file: Option<Vec<PathBuf>>,
     pub ssh_config: SshConfigSource,
     /// Default user commands run as. `None` means the login user; any other
     /// value runs commands via `sudo -u`.
@@ -298,6 +308,16 @@ impl ConnectOptions {
         self
     }
 
+    /// Replace `GlobalKnownHostsFile`. An empty iterator is `none`.
+    pub fn global_known_hosts_files<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.global_known_hosts_file = Some(paths.into_iter().map(Into::into).collect());
+        self
+    }
+
     pub fn ssh_config(mut self, source: SshConfigSource) -> Self {
         self.ssh_config = source;
         self
@@ -440,14 +460,18 @@ impl ConnectOptions {
                 .or(params.strict_host_key_checking)
                 .unwrap_or_default(),
             known_hosts_files: match &self.known_hosts_file {
-                Some(files) => files
-                    .iter()
-                    .map(|p| ssh_config::expand_path(&p.to_string_lossy()))
-                    .collect(),
+                Some(files) => expand_known_hosts_list(files),
                 None if !params.user_known_hosts_file.is_empty() => {
                     params.user_known_hosts_file.clone()
                 }
                 None => vec![ssh_config::home_dir().join(".ssh").join("known_hosts")],
+            },
+            global_known_hosts_files: match &self.global_known_hosts_file {
+                Some(files) => expand_known_hosts_list(files),
+                None => params
+                    .global_known_hosts_file
+                    .clone()
+                    .unwrap_or_else(ssh_config::default_global_known_hosts_files),
             },
             request_tty: params.request_tty.unwrap_or(false),
             user: self.user.clone(),
@@ -486,9 +510,12 @@ pub struct ResolvedOptions {
     pub kbd_interactive_authentication: bool,
     pub use_agent: bool,
     pub host_key_policy: HostKeyPolicy,
-    /// Files checked for the server host key, in order. A new key is written
-    /// to the first one.
+    /// User known_hosts files, searched first. A new key is written to the
+    /// first one, never to [`Self::global_known_hosts_files`].
     pub known_hosts_files: Vec<PathBuf>,
+    /// System known_hosts files. Searched only when [`Self::known_hosts_files`]
+    /// does not mention the host.
+    pub global_known_hosts_files: Vec<PathBuf>,
     pub request_tty: bool,
     /// Default user commands run as. `None` means the login user.
     pub user: Option<String>,
@@ -544,6 +571,7 @@ impl ResolvedOptions {
             use_agent: Some(self.use_agent),
             host_key_policy: Some(self.host_key_policy),
             known_hosts_file: Some(self.known_hosts_files.clone()),
+            global_known_hosts_file: Some(self.global_known_hosts_files.clone()),
             ssh_config: match &self.ssh_config {
                 Some(c) => SshConfigSource::Parsed(c.clone()),
                 None => SshConfigSource::None,
@@ -722,6 +750,42 @@ mod tests {
         assert_eq!(jump.ciphers.as_deref(), Some("^aes256-ctr"));
         assert_eq!(jump.server_alive_count_max, Some(2));
         assert_eq!(jump.rekey_limit.as_deref(), Some("1G 10m"));
+    }
+
+    #[test]
+    fn global_known_hosts_file_defaults_and_overrides() {
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert_eq!(
+            defaults.global_known_hosts_files,
+            ssh_config::default_global_known_hosts_files()
+        );
+
+        let cfg =
+            SshConfig::parse_str("Host *\n GlobalKnownHostsFile /etc/ssh/custom\n", None).unwrap();
+        let configured = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(
+            configured.global_known_hosts_files,
+            vec![PathBuf::from("/etc/ssh/custom")]
+        );
+
+        let cleared = ConnectOptions::new("h")
+            .global_known_hosts_files(Vec::<PathBuf>::new())
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert!(cleared.global_known_hosts_files.is_empty());
+
+        let user_only = ConnectOptions::new("h")
+            .known_hosts_file("/tmp/user_known_hosts")
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(
+            user_only.known_hosts_files,
+            vec![PathBuf::from("/tmp/user_known_hosts")]
+        );
+        assert_eq!(
+            user_only.global_known_hosts_files,
+            vec![PathBuf::from("/etc/ssh/custom")]
+        );
     }
 
     #[test]
