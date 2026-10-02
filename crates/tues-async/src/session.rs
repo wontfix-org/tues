@@ -88,24 +88,7 @@ impl Session {
 
         let mut handle = match &via {
             None => {
-                let stream = match opts.connect_timeout {
-                    Some(t) => tokio::time::timeout(
-                        t,
-                        TcpStream::connect((opts.host_name.as_str(), opts.port)),
-                    )
-                    .await
-                    .map_err(|_| Error::ConnectTimeout {
-                        host: opts.host_name.clone(),
-                        port: opts.port,
-                    })?,
-                    None => TcpStream::connect((opts.host_name.as_str(), opts.port)).await,
-                }
-                .map_err(|e| Error::Connect {
-                    host: opts.host_name.clone(),
-                    port: opts.port,
-                    reason: e.to_string(),
-                })?;
-                let _ = stream.set_nodelay(true);
+                let stream = tcp_connect(&opts).await?;
                 with_timeout(
                     opts.connect_timeout,
                     client::connect_stream(config, stream, handler),
@@ -607,6 +590,53 @@ impl client::Handler for ClientHandler {
 // ---------------------------------------------------------------------------
 // Authentication
 // ---------------------------------------------------------------------------
+
+/// TCP connect, retried `ConnectionAttempts` times with one second between
+/// failures. A refused or timed-out socket is retried. Authentication is not.
+async fn tcp_connect(opts: &ResolvedOptions) -> Result<TcpStream> {
+    let attempts = opts.connection_attempts.max(1);
+    let mut last = None;
+    for attempt in 1..=attempts {
+        match tcp_connect_once(opts).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                last = Some(e);
+                if attempt < attempts {
+                    debug!(
+                        attempt,
+                        attempts, host = %opts.host_name, "tcp connect failed, retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+    Err(last.expect("at least one connection attempt"))
+}
+
+async fn tcp_connect_once(opts: &ResolvedOptions) -> Result<TcpStream> {
+    let connect = TcpStream::connect((opts.host_name.as_str(), opts.port));
+    let stream = match opts.connect_timeout {
+        Some(t) => tokio::time::timeout(t, connect)
+            .await
+            .map_err(|_| Error::ConnectTimeout {
+                host: opts.host_name.clone(),
+                port: opts.port,
+            })?
+            .map_err(|e| Error::Connect {
+                host: opts.host_name.clone(),
+                port: opts.port,
+                reason: e.to_string(),
+            })?,
+        None => connect.await.map_err(|e| Error::Connect {
+            host: opts.host_name.clone(),
+            port: opts.port,
+            reason: e.to_string(),
+        })?,
+    };
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
+}
 
 /// Ask the password manager off the executor.
 pub(crate) async fn request_password(

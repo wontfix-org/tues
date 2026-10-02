@@ -159,6 +159,8 @@ pub struct ConnectOptions {
     pub password_manager: Option<SharedPasswordManager>,
     /// `BatchMode`. `yes` refuses a password manager that would prompt.
     pub batch_mode: Option<bool>,
+    /// `ConnectionAttempts`. `None` means unset (default 1).
+    pub connection_attempts: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -356,6 +358,14 @@ impl ConnectOptions {
         self
     }
 
+    /// How many times to try the TCP connect (`ConnectionAttempts`).
+    ///
+    /// `0` is rejected at resolve time. Authentication is not retried.
+    pub fn connection_attempts(mut self, n: u32) -> Self {
+        self.connection_attempts = Some(n);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -423,6 +433,16 @@ impl ConnectOptions {
             .clone()
             .unwrap_or_else(|| shared(MemoizingPasswordManager::new(TtyPrompter)));
 
+        let connection_attempts = self
+            .connection_attempts
+            .or(params.connection_attempts)
+            .unwrap_or(1);
+        if connection_attempts == 0 {
+            return Err(Error::Config(
+                "ConnectionAttempts must be at least 1".into(),
+            ));
+        }
+
         Ok(ResolvedOptions {
             alias,
             host_name,
@@ -488,6 +508,7 @@ impl ConnectOptions {
             password_manager,
             ssh_config: config.cloned(),
             batch_mode: self.batch_mode.or(params.batch_mode).unwrap_or(false),
+            connection_attempts,
         })
     }
 }
@@ -535,6 +556,8 @@ pub struct ResolvedOptions {
     pub ssh_config: Option<SshConfig>,
     /// `BatchMode yes`: do not prompt for a password or key passphrase.
     pub batch_mode: bool,
+    /// TCP connect attempts. Authentication is not retried.
+    pub connection_attempts: u32,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -592,6 +615,7 @@ impl ResolvedOptions {
             user: None,
             password_manager: Some(self.password_manager.clone()),
             batch_mode: Some(self.batch_mode),
+            connection_attempts: Some(self.connection_attempts),
         }
     }
 }
@@ -856,6 +880,27 @@ mod tests {
             port: None,
         });
         assert_eq!(jump.batch_mode, Some(true));
+    }
+
+    #[test]
+    fn connection_attempts_default_and_override() {
+        let cfg = SshConfig::parse_str("Host *\n ConnectionAttempts 3\n", None).unwrap();
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert_eq!(defaults.connection_attempts, 1);
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(from_config.connection_attempts, 3);
+        let forced = ConnectOptions::new("h")
+            .connection_attempts(2)
+            .resolve_with(Some(&cfg))
+            .unwrap();
+        assert_eq!(forced.connection_attempts, 2);
+        assert!(
+            ConnectOptions::new("h")
+                .connection_attempts(0)
+                .no_ssh_config()
+                .resolve()
+                .is_err()
+        );
     }
 
     use std::sync::Arc;

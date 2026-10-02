@@ -125,6 +125,8 @@ pub struct HostParams {
     pub request_tty: Option<bool>,
     /// `BatchMode`. `yes` refuses to prompt for a password or passphrase.
     pub batch_mode: Option<bool>,
+    /// `ConnectionAttempts`. `None` means the directive was not set.
+    pub connection_attempts: Option<u32>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -393,6 +395,10 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         "kbdinteractiveauthentication" => first!(p.kbd_interactive_authentication, yes_no(value)),
         "forwardagent" => first!(p.forward_agent, yes_no(value)),
         "batchmode" => first!(p.batch_mode, yes_no(value)),
+        "connectionattempts" => first!(
+            p.connection_attempts,
+            value.parse::<u32>().ok().filter(|n| *n > 0)
+        ),
         "requesttty" => first!(
             p.request_tty,
             match value.to_ascii_lowercase().as_str() {
@@ -784,5 +790,19 @@ Host *
         let cfg = SshConfig::parse_str(text, None).unwrap();
         assert_eq!(cfg.query("web").batch_mode, Some(false));
         assert_eq!(cfg.query("other").batch_mode, Some(true));
+    }
+
+    #[test]
+    fn connection_attempts_rejects_zero_and_keeps_the_first_value() {
+        let text = "\
+Host web
+  ConnectionAttempts 4
+  ConnectionAttempts 2
+Host zero
+  ConnectionAttempts 0
+";
+        let cfg = SshConfig::parse_str(text, None).unwrap();
+        assert_eq!(cfg.query("web").connection_attempts, Some(4));
+        assert_eq!(cfg.query("zero").connection_attempts, None);
     }
 }
