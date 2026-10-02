@@ -138,6 +138,9 @@ pub struct HostParams {
     pub password_prompts: Option<u32>,
     /// `NoHostAuthenticationForLocalhost`. `None` means unset (default no).
     pub no_host_auth_localhost: Option<bool>,
+    /// `RequiredRSASize`. `None` means unset (OpenSSH default 1024).
+    /// A value below 1024 is rejected when the options are resolved.
+    pub required_rsa_size: Option<u32>,
     /// Directives `tues` does not interpret, in file order (lowercased keys).
     pub unknown: Vec<(String, String)>,
 }
@@ -426,6 +429,7 @@ fn apply(p: &mut HostParams, identity_raw: &mut Vec<String>, key: &str, value: &
         "tcpkeepalive" => first!(p.tcp_keepalive, yes_no(value)),
         "numberofpasswordprompts" => first!(p.password_prompts, value.parse().ok()),
         "nohostauthenticationforlocalhost" => first!(p.no_host_auth_localhost, yes_no(value)),
+        "requiredrsasize" => first!(p.required_rsa_size, value.parse().ok()),
         "setenv" => {
             for word in split_words(value) {
                 let Some((name, val)) = word.split_once('=') else {

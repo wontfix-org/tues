@@ -214,6 +214,9 @@ pub struct ConnectOptions {
     pub password_prompts: Option<u32>,
     /// `NoHostAuthenticationForLocalhost`. `None` means unset (default no).
     pub no_host_auth_localhost: Option<bool>,
+    /// `RequiredRSASize`, in bits. `None` means unset (default 1024).
+    /// Below 1024 is rejected at resolve time.
+    pub required_rsa_size: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectOptions {
@@ -460,6 +463,14 @@ impl ConnectOptions {
         self
     }
 
+    /// Minimum RSA host-key size in bits (`RequiredRSASize`).
+    ///
+    /// The OpenSSH default is 1024, and the value cannot be lowered.
+    pub fn required_rsa_size(mut self, bits: u32) -> Self {
+        self.required_rsa_size = Some(bits);
+        self
+    }
+
     /// Resolve against `ssh_config` and defaults.
     pub fn resolve(&self) -> Result<ResolvedOptions> {
         let config = match &self.ssh_config {
@@ -544,6 +555,15 @@ impl ConnectOptions {
                 "ConnectionAttempts must be at least 1".into(),
             ));
         }
+        let required_rsa_size = self
+            .required_rsa_size
+            .or(params.required_rsa_size)
+            .unwrap_or(1024);
+        if required_rsa_size < 1024 {
+            return Err(Error::Config(format!(
+                "RequiredRSASize {required_rsa_size} is below the minimum of 1024"
+            )));
+        }
 
         Ok(ResolvedOptions {
             alias,
@@ -626,6 +646,7 @@ impl ConnectOptions {
                 .no_host_auth_localhost
                 .or(params.no_host_auth_localhost)
                 .unwrap_or(false),
+            required_rsa_size,
         })
     }
 }
@@ -685,6 +706,8 @@ pub struct ResolvedOptions {
     pub password_prompts: u32,
     /// Skip host-key checks for a localhost destination.
     pub no_host_auth_localhost: bool,
+    /// Minimum RSA host-key size in bits. Non-RSA keys are unaffected.
+    pub required_rsa_size: u32,
 }
 
 impl std::fmt::Debug for ResolvedOptions {
@@ -750,6 +773,7 @@ impl ResolvedOptions {
             tcp_keepalive: Some(self.tcp_keepalive),
             password_prompts: Some(self.password_prompts),
             no_host_auth_localhost: Some(self.no_host_auth_localhost),
+            required_rsa_size: Some(self.required_rsa_size),
         }
     }
 }
@@ -1128,6 +1152,22 @@ mod tests {
             .resolve_with(Some(&cfg))
             .unwrap();
         assert!(from_config.no_host_auth_localhost);
+    }
+
+    #[test]
+    fn required_rsa_size_defaults_to_1024_and_cannot_be_lowered() {
+        let defaults = ConnectOptions::new("h").no_ssh_config().resolve().unwrap();
+        assert_eq!(defaults.required_rsa_size, 1024);
+        let cfg = SshConfig::parse_str("Host *\n RequiredRSASize 2048\n", None).unwrap();
+        let from_config = ConnectOptions::new("h").resolve_with(Some(&cfg)).unwrap();
+        assert_eq!(from_config.required_rsa_size, 2048);
+        assert!(
+            ConnectOptions::new("h")
+                .required_rsa_size(512)
+                .no_ssh_config()
+                .resolve()
+                .is_err()
+        );
     }
 
     use std::sync::Arc;

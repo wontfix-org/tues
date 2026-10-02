@@ -68,7 +68,7 @@ many hosts.
 |---|---|---|---|
 | `NumberOfPasswordPrompts` | 1 | done | Caps password, keyboard-interactive, and key-passphrase attempts. Default 3. `0` does not ask. |
 | `NoHostAuthenticationForLocalhost` | 1 | done | Skips the host-key check when the connected host is `localhost` or a loopback address. Default no. |
-| `RequiredRSASize` | 1 | not started | Reject an RSA host key shorter than N bits inside the check we already do. |
+| `RequiredRSASize` | 1 | done | Rejects an RSA host key shorter than N bits, including when host-key checking is off. Default 1024. A lower value is rejected. Non-RSA keys are unaffected. |
 | `SendEnv` | 2 | not started | Same `set_env` as `SetEnv`, but the value is a glob against the local environment. A pattern of `*` would copy the runner's environment onto every host. |
 | `AddressFamily` | 2 | not started | Filter DNS results to IPv4 or IPv6 before connect. Dual-stack hosts in config depend on it. |
 | `BindAddress` | 2 | not started | Bind the local socket before connect. Multi-homed runners and source-address firewall rules need it. |

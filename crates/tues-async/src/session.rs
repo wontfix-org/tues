@@ -83,6 +83,7 @@ impl Session {
             user_known_hosts: opts.known_hosts_files.clone(),
             global_known_hosts: opts.global_known_hosts_files.clone(),
             no_host_auth_localhost: opts.no_host_auth_localhost,
+            required_rsa_size: opts.required_rsa_size,
         };
 
         let connect_err = |e: russh::Error| map_connect_error(e, &opts);
@@ -467,6 +468,11 @@ fn build_config(opts: &ResolvedOptions) -> client::Config {
 
 fn map_connect_error(e: russh::Error, opts: &ResolvedOptions) -> Error {
     match e {
+        russh::Error::InvalidConfig(reason) => Error::Connect {
+            host: opts.host_name.clone(),
+            port: opts.port,
+            reason,
+        },
         russh::Error::UnknownKey => Error::UnknownHostKey {
             host: opts.host_name.clone(),
             port: opts.port,
@@ -516,6 +522,8 @@ pub(crate) struct ClientHandler {
     global_known_hosts: Vec<PathBuf>,
     /// `NoHostAuthenticationForLocalhost`.
     no_host_auth_localhost: bool,
+    /// `RequiredRSASize`. RSA host keys shorter than this are rejected.
+    required_rsa_size: u32,
 }
 
 enum HostKeySeen {
@@ -571,6 +579,15 @@ impl client::Handler for ClientHandler {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             PublicKeyOrCertificate::Certificate(cert) => PublicKey::from(cert.public_key().clone()),
         };
+        if let Some(rsa) = key.key_data().rsa() {
+            let bits = rsa.key_size();
+            if bits < self.required_rsa_size {
+                return Err(russh::Error::InvalidConfig(format!(
+                    "RSA host key is {bits} bits; minimum is {}",
+                    self.required_rsa_size
+                )));
+            }
+        }
         if self.no_host_auth_localhost && is_localhost_name(&self.host) {
             return Ok(true);
         }
@@ -1058,6 +1075,7 @@ mod tests {
             user_known_hosts: vec![user],
             global_known_hosts: vec![global],
             no_host_auth_localhost: false,
+            required_rsa_size: 1024,
         }
     }
 
@@ -1195,6 +1213,41 @@ mod tests {
         local.no_host_auth_localhost = false;
         let err = check(&mut local, RIGHT).await.unwrap_err();
         assert!(matches!(err, russh::Error::UnknownKey));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const RSA_512: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAQQDFr9PWuBdxJM1zvmguurMXmXRy/vfsXDCwFMFYchwySSnByGABzs/NNUjEsxInTdRj4zrKLMUOMnhW8MkwSFJz";
+    const RSA_1024: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDM3OeRAF3f/K9j/uB+1BtRicVGFDz3yIlmenpfcPDAzunFinSMzzYMOTzJRCSEofEQ54JM7javiEZi8XMOkoB8MV/ktBEt5q8NC+u9B4mXJx6xnky9ceE5wdQVkigOMSql/udY+uXZZ6wRaKMCcV9Mkfiqyca149S638nQMu1kNw==";
+
+    #[tokio::test]
+    async fn rsa_host_key_below_the_minimum_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("tues-rsa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("user");
+        let global = dir.join("global");
+        std::fs::write(&user, "").unwrap();
+        std::fs::write(&global, "").unwrap();
+
+        let mut strict = handler(user, global, HostKeyPolicy::Off);
+        let err = check(&mut strict, RSA_512).await.unwrap_err();
+        assert!(
+            matches!(err, russh::Error::InvalidConfig(ref msg) if msg.contains("512")),
+            "{err}"
+        );
+
+        // 1024 meets the default minimum, so the size check lets it through.
+        // Host-key policy is off, so the unknown key is accepted.
+        assert!(check(&mut strict, RSA_1024).await.unwrap());
+
+        strict.required_rsa_size = 2048;
+        let err = check(&mut strict, RSA_1024).await.unwrap_err();
+        assert!(
+            matches!(err, russh::Error::InvalidConfig(ref msg) if msg.contains("1024")),
+            "{err}"
+        );
+        assert!(check(&mut strict, RIGHT).await.unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
