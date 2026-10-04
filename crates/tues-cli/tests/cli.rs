@@ -42,7 +42,7 @@ fn multiple_hosts_with_sudo_and_prefixes() {
     let f = sshd();
     let out = tues()
         .arg("--no-pty")
-        .arg("-j")
+        .arg("-n")
         .arg("2")
         .arg("-u")
         .arg("root")
@@ -64,9 +64,9 @@ fn multiple_hosts_with_sudo_and_prefixes() {
     assert_eq!(
         lines,
         vec![
-            format!("{}: root", f.host),
-            format!("{}:{}: root", f.host, f.port),
-            format!("{}@{}: root", USER, f.host),
+            format!("[{}/stdout]: root", f.host),
+            format!("[{}:{}/stdout]: root", f.host, f.port),
+            format!("[{}@{}/stdout]: root", USER, f.host),
         ]
     );
     assert!(
@@ -144,7 +144,7 @@ fn check_rejects_more_than_one_job() {
     let f = sshd();
     let out = tues()
         .arg("--check")
-        .arg("-j")
+        .arg("-n")
         .arg("2")
         .arg("true")
         .arg("cl")
@@ -258,7 +258,7 @@ fn prefixed_output_completes_partial_last_lines() {
     let f = sshd();
     let out = tues()
         .arg("--no-pty")
-        .arg("-j")
+        .arg("-n")
         .arg("2")
         .arg("printf 'a\\nb'; printf 'e' >&2")
         .arg("cl")
@@ -278,10 +278,10 @@ fn prefixed_output_completes_partial_last_lines() {
     assert_eq!(
         lines,
         vec![
-            format!("{}: a", f.host),
-            format!("{}: b", f.host),
-            format!("{second}: a"),
-            format!("{second}: b"),
+            format!("[{}/stdout]: a", f.host),
+            format!("[{}/stdout]: b", f.host),
+            format!("[{second}/stdout]: a"),
+            format!("[{second}/stdout]: b"),
         ]
     );
     assert!(stdout.ends_with('\n'), "{stdout:?}");
@@ -290,8 +290,53 @@ fn prefixed_output_completes_partial_last_lines() {
     lines.sort();
     assert_eq!(
         lines,
-        vec![format!("{}: e", f.host), format!("{second}: e")]
+        vec![
+            format!("[{}/stderr]: e", f.host),
+            format!("[{second}/stderr]: e")
+        ]
     );
+}
+
+#[test]
+fn prefix_format_interpolates_connection_fields() {
+    let f = sshd();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--prefix-format")
+        .arg("<name>|<server-ip>|<server-port>|<client-port>|<stream>|")
+        .arg("printf out; printf err >&2")
+        .arg("cl")
+        .arg(&f.host)
+        .arg(format!("{}:{}", f.host, f.port))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines: Vec<&str> = stdout.lines().collect();
+    lines.sort();
+    assert_eq!(lines.len(), 2, "{stdout:?}");
+    let named = format!("{}:{}", f.host, f.port);
+    for line in &lines {
+        let parts: Vec<&str> = line.split('|').collect();
+        assert_eq!(parts.len(), 6, "{line}");
+        assert!(parts[0] == f.host || parts[0] == named, "{line}");
+        assert_eq!(parts[1], f.host);
+        assert_eq!(parts[2], f.port.to_string());
+        assert!(parts[3].parse::<u16>().is_ok(), "client port: {}", parts[3]);
+        assert_eq!(parts[4], "stdout");
+        assert_eq!(parts[5], "out");
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut lines: Vec<&str> = stderr.lines().collect();
+    lines.sort();
+    assert_eq!(lines.len(), 2, "{stderr:?}");
+    for line in &lines {
+        assert!(line.ends_with("|stderr|err"), "{line}");
+    }
 }
 
 #[test]
@@ -511,7 +556,10 @@ fn file_provider_reads_files_and_stdin_and_show_hosts_prints_them() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(stdout, format!("{}: ok\n{}: ok\n", f.host, f.host));
+    assert_eq!(
+        stdout,
+        format!("[{0}/stdout]: ok\n[{0}/stdout]: ok\n", f.host)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.starts_with(&format!("2 hosts:\n{}\n{}\n", f.host, f.host)),
@@ -810,7 +858,30 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("{}: root\n", f.host)
+        format!("[{}/stdout]: root\n", f.host)
+    );
+
+    std::fs::write(
+        dir.join("who-defaults"),
+        "#!/bin/sh\n# tues-args = {\"user\": \"root\", \"pty\": false, \"prefix\": true, \"prefix-format\": \"<name>/<stream>|\"}\nid -un\n",
+    )
+    .unwrap();
+    let out = tues()
+        .env("TUES_PATH", &dir)
+        .arg("-s")
+        .arg("who-defaults")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("{}/stdout|root\n", f.host)
     );
 
     let out = tues()
@@ -819,6 +890,8 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
         .arg(USER)
         .arg("--pty")
         .arg("--no-prefix")
+        .arg("--prefix-format")
+        .arg("[<name>/<stream>]: ")
         .arg("-s")
         .arg("who-defaults")
         .arg("cl")

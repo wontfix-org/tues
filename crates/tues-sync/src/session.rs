@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -64,6 +65,16 @@ impl Session {
 
     pub fn host(&self) -> &str {
         self.inner.host()
+    }
+
+    /// Peer IP of a direct TCP connection, or `None` when connected via a jump host.
+    pub fn peer_ip(&self) -> Option<IpAddr> {
+        self.inner.peer_ip()
+    }
+
+    /// Local TCP port of a direct connection, or `None` when connected via a jump host.
+    pub fn local_port(&self) -> Option<u16> {
+        self.inner.local_port()
     }
 
     pub fn user(&self) -> Option<&str> {

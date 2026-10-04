@@ -20,7 +20,7 @@ def test_cli_main_prints_help_in_process(capfd):
 
 
 def test_cli_main_reports_usage_errors(capfd):
-    assert cli_main(["tues", "--jobs", "many", "true", "cl", "h"]) == 2
+    assert cli_main(["tues", "--num-jobs", "many", "true", "cl", "h"]) == 2
     out, err = capfd.readouterr()
     assert out == ""
     assert "invalid value 'many'" in err

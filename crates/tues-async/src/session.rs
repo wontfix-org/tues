@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +42,10 @@ pub(crate) struct Inner {
     files: Mutex<Option<Sftp>>,
     /// Keeps the jump host connection alive for the lifetime of this session.
     _via: Option<Session>,
+    /// Peer address of a direct TCP connection. Absent when connected via a jump host.
+    peer_addr: Option<SocketAddr>,
+    /// Local address of a direct TCP connection. Absent when connected via a jump host.
+    local_addr: Option<SocketAddr>,
 }
 
 impl std::fmt::Debug for Session {
@@ -88,19 +93,20 @@ impl Session {
 
         let connect_err = |e: russh::Error| map_connect_error(e, &opts);
 
-        let mut handle = match &via {
+        let (mut handle, peer_addr, local_addr) = match &via {
             None => {
-                let stream = tcp_connect(&opts).await?;
-                with_timeout(
+                let connected = tcp_connect(&opts).await?;
+                let handle = with_timeout(
                     opts.connect_timeout,
-                    client::connect_stream(config, stream, handler),
+                    client::connect_stream(config, connected.stream, handler),
                 )
                 .await
                 .ok_or_else(|| Error::ConnectTimeout {
                     host: opts.host_name.clone(),
                     port: opts.port,
                 })?
-                .map_err(connect_err)?
+                .map_err(connect_err)?;
+                (handle, Some(connected.peer), Some(connected.local))
             }
             Some(jump) => {
                 let channel = jump
@@ -119,7 +125,7 @@ impl Session {
                         reason: format!("via {}: {e}", jump.inner.opts.host_name),
                     })?;
                 let stream = channel.into_stream();
-                with_timeout(
+                let handle = with_timeout(
                     opts.connect_timeout,
                     client::connect_stream(config, stream, handler),
                 )
@@ -128,7 +134,8 @@ impl Session {
                     host: opts.host_name.clone(),
                     port: opts.port,
                 })?
-                .map_err(connect_err)?
+                .map_err(connect_err)?;
+                (handle, None, None)
             }
         };
 
@@ -141,6 +148,8 @@ impl Session {
                 closed: AtomicBool::new(false),
                 files: Mutex::new(None),
                 _via: via,
+                peer_addr,
+                local_addr,
             }),
         })
     }
@@ -158,6 +167,16 @@ impl Session {
     /// The host name connected to.
     pub fn host(&self) -> &str {
         &self.inner.opts.host_name
+    }
+
+    /// Peer IP of a direct TCP connection, or `None` when connected via a jump host.
+    pub fn peer_ip(&self) -> Option<IpAddr> {
+        self.inner.peer_addr.map(|a| a.ip())
+    }
+
+    /// Local TCP port of a direct connection, or `None` when connected via a jump host.
+    pub fn local_port(&self) -> Option<u16> {
+        self.inner.local_addr.map(|a| a.port())
     }
 
     /// The default user commands run as, or `None` for the login user.
@@ -647,14 +666,21 @@ async fn apply_set_env(
     Ok(())
 }
 
+/// A TCP stream plus the endpoints observed at connect time.
+struct TcpConnected {
+    stream: TcpStream,
+    peer: SocketAddr,
+    local: SocketAddr,
+}
+
 /// TCP connect, retried `ConnectionAttempts` times with one second between
 /// failures. A refused or timed-out socket is retried. Authentication is not.
-async fn tcp_connect(opts: &ResolvedOptions) -> Result<TcpStream> {
+async fn tcp_connect(opts: &ResolvedOptions) -> Result<TcpConnected> {
     let attempts = opts.connection_attempts.max(1);
     let mut last = None;
     for attempt in 1..=attempts {
         match tcp_connect_once(opts).await {
-            Ok(stream) => return Ok(stream),
+            Ok(connected) => return Ok(connected),
             Err(e) => {
                 last = Some(e);
                 if attempt < attempts {
@@ -670,7 +696,7 @@ async fn tcp_connect(opts: &ResolvedOptions) -> Result<TcpStream> {
     Err(last.expect("at least one connection attempt"))
 }
 
-async fn tcp_connect_once(opts: &ResolvedOptions) -> Result<TcpStream> {
+async fn tcp_connect_once(opts: &ResolvedOptions) -> Result<TcpConnected> {
     let connect = TcpStream::connect((opts.host_name.as_str(), opts.port));
     let stream = match opts.connect_timeout {
         Some(t) => tokio::time::timeout(t, connect)
@@ -690,11 +716,25 @@ async fn tcp_connect_once(opts: &ResolvedOptions) -> Result<TcpStream> {
             reason: e.to_string(),
         })?,
     };
+    let peer = stream.peer_addr().map_err(|e| Error::Connect {
+        host: opts.host_name.clone(),
+        port: opts.port,
+        reason: e.to_string(),
+    })?;
+    let local = stream.local_addr().map_err(|e| Error::Connect {
+        host: opts.host_name.clone(),
+        port: opts.port,
+        reason: e.to_string(),
+    })?;
     let _ = stream.set_nodelay(true);
     if opts.tcp_keepalive {
         set_tcp_keepalive(&stream);
     }
-    Ok(stream)
+    Ok(TcpConnected {
+        stream,
+        peer,
+        local,
+    })
 }
 
 #[cfg(unix)]

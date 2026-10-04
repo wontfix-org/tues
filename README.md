@@ -47,8 +47,8 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
 
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
-  -j, -n, --jobs <N>         Hosts worked on concurrently (default: 1)
-  -p, --parallel             Up to 20 hosts at once, unless `-j` or `-n` is set
+  -n, --num-jobs <N>         Hosts worked on concurrently (default: 1)
+  -p, --parallel             Up to 20 hosts at once, unless `-n` is set
       --check                Stop after the first failure (one job only)
       --no-check             Keep going after a failure (default)
       --port <PORT>          SSH port
@@ -61,7 +61,8 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
       --connect-timeout <S>  Connection timeout in seconds
-      --no-prefix            Do not prefix output lines with the host name
+      --no-prefix            Do not prefix output lines
+      --prefix-format <FMT>  Line prefix template (default: [<name>/<stream>]: )
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
       --show-hosts           Print the hosts on stderr, then run the command
       --sort-hosts           Sort hosts alphabetically before running
@@ -81,7 +82,7 @@ alias from `~/.ssh/config`.
 
 ```sh
 # Restart a service on three hosts, four at a time, as root.
-tues -l deploy -u root -j 4 'systemctl restart nginx' cl web01 web02 web03
+tues -l deploy -u root -n 4 'systemctl restart nginx' cl web01 web02 web03
 
 # One host: raw stdout/stderr, the remote exit status becomes ours.
 # `--pty` allocates a pseudo-terminal; `--no-pty` overrides a script that asks for one.
@@ -122,16 +123,17 @@ matter, and only that first block is read:
 
 ```sh
 #!/bin/sh
-# tues-args = {"user": "root", "pty": false, "prefix": true}
+# tues-args = {"user": "root", "pty": false, "prefix": true, "prefix-format": "[<name>/<stream>]: "}
 # tues-provider = "cl"
 # tues-provider-args = ["web01", "web02"]
 ```
 
 `user` is the sudo user, `pty` requests a pseudo-terminal, and `prefix` labels
-each output line with the host (`true` always, `false` never; omit it to
-prefix only when several hosts are selected). Omitting `pty` leaves the
-terminal off, the same as the command line. `--user`, `--pty` / `--no-pty`,
-and `--no-prefix` override the header.
+each output line (`true` always, `false` never; omit it to prefix only when
+several hosts are selected). `prefix-format` is the template for those labels.
+Omitting `pty` leaves the terminal off, the same as the command line.
+`--user`, `--pty` / `--no-pty`, `--no-prefix`, and `--prefix-format` override
+the header.
 
 `tues-provider` is a JSON string (`cl`, `file`, or a provider name) and
 `tues-provider-args` is a JSON array of strings passed to that provider. They
@@ -144,13 +146,16 @@ directory under its own name and deletes it once the command has finished.
 directory receives the file inside it, like `cp`. Escape a literal `:` as `\:`
 and a literal `\` as `\\`. Uploads run as the command user.
 
-Hosts are visited one after another. `-j` and `-n` raise how many run at once,
-and `-p` runs 20 at a time when neither is set. With several hosts each output
-line is prefixed with `host: `, and the exit status
-is `0` only if every host succeeded. With one host, output is passed through
-unchanged and the exit status is the remote one (`255` on connection errors,
-like `ssh`). `--check` stops at the first host that fails or exits non-zero;
-it is rejected when more than one job runs at a time.
+Hosts are visited one after another. `-n` raises how many run at once, and `-p`
+runs 20 at a time when it is not set. With several hosts each output line is
+prefixed with `[<name>/<stream>]: ` by default (`stdout`, `stderr`, or `pty`),
+and the exit status is `0` only if every host succeeded. `--prefix-format`
+changes the template; placeholders are `<name>` (the provider host string),
+`<server-ip>`, `<client-port>`, `<server-port>`, and `<stream>`. With one host,
+output is passed through unchanged and the exit status is the remote one
+(`255` on connection errors, like `ssh`). `--check` stops at the first host
+that fails or exits non-zero; it is rejected when more than one job runs at a
+time.
 
 ```sh
 cargo install --path crates/tues-cli

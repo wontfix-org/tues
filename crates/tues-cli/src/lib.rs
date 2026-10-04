@@ -11,10 +11,10 @@
 //! passed to the provider.
 //!
 //! `--script` replaces the remote command. The script is found on `TUES_PATH`,
-//! uploaded, run, and removed. A text script can set `user`, `pty`, and
-//! `prefix` defaults in a `tues-args` line in its top comment block, and can
-//! name the hosts with `tues-provider` and `tues-provider-args` when the
-//! command line does not.
+//! uploaded, run, and removed. A text script can set `user`, `pty`, `prefix`,
+//! and `prefix-format` defaults in a `tues-args` line in its top comment block,
+//! and can name the hosts with `tues-provider` and `tues-provider-args` when
+//! the command line does not.
 //!
 //! [`run`] is the whole program: the `tues` binary calls it with its
 //! arguments, and the Python extension exposes it as `tues._tues.cli_main`.
@@ -88,10 +88,10 @@ struct Cli {
     user: Option<String>,
 
     /// Hosts worked on concurrently (default: 1, or 20 with `-p`).
-    #[arg(short = 'j', visible_short_alias = 'n', long, value_name = "N")]
-    jobs: Option<usize>,
+    #[arg(short = 'n', long = "num-jobs", value_name = "N")]
+    num_jobs: Option<usize>,
 
-    /// Work on up to 20 hosts at once. Has no effect when `-j` or `-n` is set.
+    /// Work on up to 20 hosts at once. Has no effect when `-n` is set.
     #[arg(short = 'p', long, action = clap::ArgAction::SetTrue)]
     parallel: bool,
 
@@ -147,10 +147,17 @@ struct Cli {
     #[arg(long, value_name = "SECS")]
     connect_timeout: Option<u64>,
 
-    /// Do not prefix output lines with the host name when running on
-    /// several hosts.
+    /// Do not prefix output lines when running on several hosts.
     #[arg(long)]
     no_prefix: bool,
+
+    /// Format for per-host output line prefixes.
+    ///
+    /// Placeholders: `<name>` (provider host string), `<server-ip>`,
+    /// `<client-port>`, `<server-port>`, and `<stream>` (`stdout`, `stderr`,
+    /// or `pty`). Default: `[<name>/<stream>]: `.
+    #[arg(long, value_name = "FORMAT")]
+    prefix_format: Option<String>,
 
     /// Run a script from `TUES_PATH` instead of a remote command.
     ///
@@ -161,10 +168,10 @@ struct Cli {
     ///
     /// A text script may set defaults in its top comment block:
     /// `# tues-args = {"user": "root", "pty": false, "prefix": true}`.
-    /// `--user`, `--pty` / `--no-pty`, and `--no-prefix` override those.
-    /// `# tues-provider = "cl"` and `# tues-provider-args = ["web01"]` name
-    /// the hosts when the command line does not. A provider after `--script`
-    /// overrides both lines.
+    /// `--user`, `--pty` / `--no-pty`, `--no-prefix`, and `--prefix-format`
+    /// override those. `# tues-provider = "cl"` and
+    /// `# tues-provider-args = ["web01"]` name the hosts when the command line
+    /// does not. A provider after `--script` overrides both lines.
     #[arg(short = 's', long, value_name = "SPEC")]
     script: Option<String>,
 
@@ -240,6 +247,9 @@ impl FileSpec {
     }
 }
 
+/// Default line prefix when more than one host runs (or when `prefix` is on).
+const DEFAULT_PREFIX_FORMAT: &str = "[<name>/<stream>]: ";
+
 /// What one invocation runs on each host, after `--script` defaults are applied.
 #[derive(Debug, Clone)]
 struct Run {
@@ -250,6 +260,8 @@ struct Run {
     pty: bool,
     /// `None` means prefix only when more than one host is selected.
     prefix: Option<bool>,
+    /// Template for each output line prefix; see [`DEFAULT_PREFIX_FORMAT`].
+    prefix_format: String,
 }
 
 /// Defaults read from a script header: `tues-args`, `tues-provider`, and
@@ -259,6 +271,7 @@ struct ScriptDefaults {
     user: Option<String>,
     pty: Option<bool>,
     prefix: Option<bool>,
+    prefix_format: Option<String>,
     provider: Option<String>,
     /// Absent when the header has no `tues-provider-args` line.
     provider_args: Option<Vec<String>>,
@@ -506,10 +519,10 @@ impl Cli {
         self.check && !self.no_check
     }
 
-    /// `-j`/`-n` choose the count. `-p` means 20 when neither was given.
+    /// `-n` chooses the count. `-p` means 20 when neither was given.
     fn job_count(&self) -> usize {
         const PARALLEL_JOBS: usize = 20;
-        match self.jobs {
+        match self.num_jobs {
             Some(n) => n.max(1),
             None if self.parallel => PARALLEL_JOBS,
             None => 1,
@@ -711,12 +724,13 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
                 user: cli.user.clone(),
                 pty: cli.use_pty(),
                 prefix: cli.no_prefix.then_some(false),
+                prefix_format: effective_prefix_format(cli, None),
             },
             None,
         ));
     };
     let resolved = resolve_script(spec)?;
-    let (user, pty, prefix) = effective_settings(cli, &resolved.defaults);
+    let (user, pty, prefix, prefix_format) = effective_settings(cli, &resolved.defaults);
     let defaults = resolved.defaults;
     Ok((
         Run {
@@ -725,6 +739,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
             user,
             pty,
             prefix,
+            prefix_format,
         },
         Some(defaults),
     ))
@@ -732,11 +747,11 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
 
 /// Command-line flags win. Unset flags keep the script header, and unset
 /// header fields keep the usual defaults (no pty, prefix when there are
-/// several hosts).
+/// several hosts, default prefix format).
 fn effective_settings(
     cli: &Cli,
     defaults: &ScriptDefaults,
-) -> (Option<String>, bool, Option<bool>) {
+) -> (Option<String>, bool, Option<bool>, String) {
     let user = cli.user.clone().or_else(|| defaults.user.clone());
     let pty = if cli.pty || cli.no_pty {
         cli.use_pty()
@@ -748,7 +763,16 @@ fn effective_settings(
     } else {
         defaults.prefix
     };
-    (user, pty, prefix)
+    let prefix_format = effective_prefix_format(cli, Some(defaults));
+    (user, pty, prefix, prefix_format)
+}
+
+/// `--prefix-format` wins over the script header; otherwise the default template.
+fn effective_prefix_format(cli: &Cli, defaults: Option<&ScriptDefaults>) -> String {
+    cli.prefix_format
+        .clone()
+        .or_else(|| defaults.and_then(|d| d.prefix_format.clone()))
+        .unwrap_or_else(|| DEFAULT_PREFIX_FORMAT.to_string())
 }
 
 struct ResolvedScript {
@@ -1043,6 +1067,12 @@ fn parse_tues_args(json: &str) -> anyhow::Result<ScriptDefaults> {
                 };
                 defaults.prefix = Some(prefix);
             }
+            "prefix-format" => {
+                let Some(format) = value.as_str() else {
+                    anyhow::bail!("tues-args prefix-format must be a string");
+                };
+                defaults.prefix_format = Some(format.to_string());
+            }
             other => anyhow::bail!("unknown tues-args key: {other}"),
         }
     }
@@ -1103,6 +1133,7 @@ async fn run_host(
                 &session,
                 server,
                 prefix,
+                &run.prefix_format,
                 stdout,
                 stderr,
             )
@@ -1152,6 +1183,7 @@ async fn run_command(
     session: &Session,
     server: &str,
     prefix: bool,
+    prefix_format: &str,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
@@ -1162,9 +1194,19 @@ async fn run_command(
         let mut child = cmd.spawn().await?;
         let out = child.stdout.take().expect("piped");
         let err = child.stderr.take().expect("piped");
-        let label = server.to_string();
-        let out_task = tokio::spawn(prefix_lines(out, format!("{label}: "), stdout));
-        let err_task = tokio::spawn(prefix_lines(err, format!("{label}: "), stderr));
+        let ctx = PrefixContext::from_session(server, session);
+        let out_stream = if pty { "pty" } else { "stdout" };
+        let err_stream = if pty { "pty" } else { "stderr" };
+        let out_task = tokio::spawn(prefix_lines(
+            out,
+            render_prefix(prefix_format, &ctx, out_stream),
+            stdout,
+        ));
+        let err_task = tokio::spawn(prefix_lines(
+            err,
+            render_prefix(prefix_format, &ctx, err_stream),
+            stderr,
+        ));
         let status = child.wait().await;
         let _ = out_task.await;
         let _ = err_task.await;
@@ -1173,6 +1215,70 @@ async fn run_command(
         cmd = cmd.stdout(Stdio::Inherit).stderr(Stdio::Inherit);
         cmd.status().await
     }
+}
+
+/// Host and connection values substituted into a prefix format template.
+#[derive(Debug)]
+struct PrefixContext<'a> {
+    name: &'a str,
+    server_ip: String,
+    client_port: String,
+    server_port: String,
+}
+
+impl<'a> PrefixContext<'a> {
+    fn from_session(name: &'a str, session: &Session) -> Self {
+        let server_ip = session
+            .peer_ip()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| session.host().to_string());
+        let client_port = session
+            .local_port()
+            .map(|p| p.to_string())
+            .unwrap_or_default();
+        let server_port = session.options().port.to_string();
+        Self {
+            name,
+            server_ip,
+            client_port,
+            server_port,
+        }
+    }
+}
+
+/// Replace `<name>`, `<server-ip>`, `<client-port>`, `<server-port>`, and
+/// `<stream>` in `format`. Unknown angle-bracket tokens are left unchanged.
+fn render_prefix(format: &str, ctx: &PrefixContext<'_>, stream: &str) -> String {
+    let mut out = String::with_capacity(format.len() + ctx.name.len());
+    let mut rest = format;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('>') else {
+            out.push('<');
+            rest = after;
+            continue;
+        };
+        let token = &after[..end];
+        let replacement = match token {
+            "name" => ctx.name,
+            "server-ip" => ctx.server_ip.as_str(),
+            "client-port" => ctx.client_port.as_str(),
+            "server-port" => ctx.server_port.as_str(),
+            "stream" => stream,
+            _ => {
+                out.push('<');
+                out.push_str(token);
+                out.push('>');
+                rest = &after[end + 1..];
+                continue;
+            }
+        };
+        out.push_str(replacement);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Copy `reader` to `sink`, prefixing every line. Partial trailing lines are
@@ -1404,7 +1510,8 @@ mod tests {
         let cli = super::Cli::try_parse_from(["tues", "-n", "4", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.job_count(), 4);
 
-        let cli = super::Cli::try_parse_from(["tues", "-p", "-j", "3", "true", "cl", "h"]).unwrap();
+        let cli =
+            super::Cli::try_parse_from(["tues", "-p", "--num-jobs", "3", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.job_count(), 3);
 
         let cli = super::Cli::try_parse_from(["tues", "-n", "0", "true", "cl", "h"]).unwrap();
@@ -1578,11 +1685,46 @@ mod tests {
         assert!(err("{\"user\": \"\"}").contains("user must not be empty"));
         assert!(err("{\"pty\": \"yes\"}").contains("pty must be a boolean"));
         assert!(err("{\"prefix\": 0}").contains("prefix must be a boolean"));
+        assert!(
+            err("{\"prefix-format\": true}").contains("prefix-format must be a string")
+        );
         assert!(err("{\"nope\": true}").contains("unknown tues-args key: nope"));
         assert_eq!(
             super::parse_tues_args("{}").unwrap(),
             super::ScriptDefaults::default()
         );
+        let parsed = super::parse_tues_args(
+            "{\"prefix-format\": \"[<name>/<stream>]: \"}",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.prefix_format.as_deref(),
+            Some("[<name>/<stream>]: ")
+        );
+    }
+
+    #[test]
+    fn prefix_format_interpolates_known_tokens() {
+        let ctx = super::PrefixContext {
+            name: "web01",
+            server_ip: "10.0.0.1".into(),
+            client_port: "54321".into(),
+            server_port: "22".into(),
+        };
+        assert_eq!(
+            super::render_prefix(super::DEFAULT_PREFIX_FORMAT, &ctx, "stdout"),
+            "[web01/stdout]: "
+        );
+        assert_eq!(
+            super::render_prefix(
+                "<name> <server-ip>:<server-port> from :<client-port> <stream> <unknown>",
+                &ctx,
+                "stderr",
+            ),
+            "web01 10.0.0.1:22 from :54321 stderr <unknown>"
+        );
+        assert_eq!(super::render_prefix("plain", &ctx, "pty"), "plain");
+        assert_eq!(super::render_prefix("a < b", &ctx, "stdout"), "a < b");
     }
 
     #[test]
@@ -1639,6 +1781,7 @@ echo hi
         assert_eq!(defaults.user.as_deref(), Some("root"));
         assert_eq!(defaults.pty, Some(false));
         assert_eq!(defaults.prefix, Some(true));
+        assert_eq!(defaults.prefix_format, None);
 
         let loose = "#\ttues-args\t=\t{\"pty\": false}\n";
         let defaults = super::parse_tues_args(super::header_json(loose).unwrap().unwrap()).unwrap();
@@ -1833,6 +1976,7 @@ echo hi
             user: Some("root".into()),
             pty: Some(true),
             prefix: Some(true),
+            prefix_format: Some("<name>: ".into()),
             ..Default::default()
         };
         let cli = super::Cli::try_parse_from([
@@ -1841,28 +1985,33 @@ echo hi
             "alice",
             "--no-pty",
             "--no-prefix",
+            "--prefix-format",
+            "[<stream>] ",
             "-s",
             "tool",
             "cl",
             "h",
         ])
         .unwrap();
-        let (user, pty, prefix) = super::effective_settings(&cli, &defaults);
+        let (user, pty, prefix, prefix_format) = super::effective_settings(&cli, &defaults);
         assert_eq!(user.as_deref(), Some("alice"));
         assert!(!pty);
         assert_eq!(prefix, Some(false));
+        assert_eq!(prefix_format, "[<stream>] ");
 
         let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "h"]).unwrap();
-        let (user, pty, prefix) = super::effective_settings(&cli, &defaults);
+        let (user, pty, prefix, prefix_format) = super::effective_settings(&cli, &defaults);
         assert_eq!(user.as_deref(), Some("root"));
         assert!(pty);
         assert_eq!(prefix, Some(true));
+        assert_eq!(prefix_format, "<name>: ");
 
         let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "h"]).unwrap();
-        let (user, pty, prefix) =
+        let (user, pty, prefix, prefix_format) =
             super::effective_settings(&cli, &super::ScriptDefaults::default());
         assert_eq!(user, None);
         assert!(!pty);
         assert_eq!(prefix, None);
+        assert_eq!(prefix_format, super::DEFAULT_PREFIX_FORMAT);
     }
 }
