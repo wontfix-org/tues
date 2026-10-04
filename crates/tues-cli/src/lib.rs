@@ -147,8 +147,12 @@ struct Cli {
     #[arg(long, value_name = "SECS")]
     connect_timeout: Option<u64>,
 
-    /// Do not prefix output lines when running on several hosts.
-    #[arg(long)]
+    /// Prefix output lines even when running on a single host.
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_prefix")]
+    prefix: bool,
+
+    /// Do not prefix output lines, even when running on several hosts.
+    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "prefix")]
     no_prefix: bool,
 
     /// Format for per-host output line prefixes.
@@ -168,8 +172,8 @@ struct Cli {
     ///
     /// A text script may set defaults in its top comment block:
     /// `# tues-args = {"user": "root", "pty": false, "prefix": true}`.
-    /// `--user`, `--pty` / `--no-pty`, `--no-prefix`, and `--prefix-format`
-    /// override those. `# tues-provider = "cl"` and
+    /// `--user`, `--pty` / `--no-pty`, `--prefix` / `--no-prefix`, and
+    /// `--prefix-format` override those. `# tues-provider = "cl"` and
     /// `# tues-provider-args = ["web01"]` name the hosts when the command line
     /// does not. A provider after `--script` overrides both lines.
     #[arg(short = 's', long, value_name = "SPEC")]
@@ -514,6 +518,17 @@ impl Cli {
         self.pty && !self.no_pty
     }
 
+    /// Explicit `--prefix` / `--no-prefix`, or `None` to follow host count / script defaults.
+    fn prefix_setting(&self) -> Option<bool> {
+        if self.prefix {
+            Some(true)
+        } else if self.no_prefix {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
     /// Stop at the first unsuccessful host unless `--no-check` was given last.
     fn fail_fast(&self) -> bool {
         self.check && !self.no_check
@@ -723,7 +738,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
                 script: None,
                 user: cli.user.clone(),
                 pty: cli.use_pty(),
-                prefix: cli.no_prefix.then_some(false),
+                prefix: cli.prefix_setting(),
                 prefix_format: effective_prefix_format(cli, None),
             },
             None,
@@ -758,11 +773,7 @@ fn effective_settings(
     } else {
         defaults.pty.unwrap_or(false)
     };
-    let prefix = if cli.no_prefix {
-        Some(false)
-    } else {
-        defaults.prefix
-    };
+    let prefix = cli.prefix_setting().or(defaults.prefix);
     let prefix_format = effective_prefix_format(cli, Some(defaults));
     (user, pty, prefix, prefix_format)
 }
@@ -2006,6 +2017,17 @@ echo hi
         assert_eq!(prefix, Some(true));
         assert_eq!(prefix_format, "<name>: ");
 
+        let defaults_off = super::ScriptDefaults {
+            prefix: Some(false),
+            ..Default::default()
+        };
+        let cli = super::Cli::try_parse_from(["tues", "--prefix", "-s", "tool", "cl", "h"]).unwrap();
+        let (user, pty, prefix, prefix_format) = super::effective_settings(&cli, &defaults_off);
+        assert_eq!(user, None);
+        assert!(!pty);
+        assert_eq!(prefix, Some(true));
+        assert_eq!(prefix_format, super::DEFAULT_PREFIX_FORMAT);
+
         let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "cl", "h"]).unwrap();
         let (user, pty, prefix, prefix_format) =
             super::effective_settings(&cli, &super::ScriptDefaults::default());
@@ -2013,5 +2035,18 @@ echo hi
         assert!(!pty);
         assert_eq!(prefix, None);
         assert_eq!(prefix_format, super::DEFAULT_PREFIX_FORMAT);
+    }
+
+    #[test]
+    fn prefix_flag_overrides_no_prefix() {
+        let on = super::Cli::try_parse_from(["tues", "--no-prefix", "--prefix", "true", "cl", "h"])
+            .unwrap();
+        assert_eq!(on.prefix_setting(), Some(true));
+        let off =
+            super::Cli::try_parse_from(["tues", "--prefix", "--no-prefix", "true", "cl", "h"])
+                .unwrap();
+        assert_eq!(off.prefix_setting(), Some(false));
+        let plain = super::Cli::try_parse_from(["tues", "true", "cl", "h"]).unwrap();
+        assert_eq!(plain.prefix_setting(), None);
     }
 }

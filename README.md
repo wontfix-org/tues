@@ -61,6 +61,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
       --connect-timeout <S>  Connection timeout in seconds
+      --prefix               Prefix output lines even on a single host
       --no-prefix            Do not prefix output lines
       --prefix-format <FMT>  Line prefix template (default: [<name>/<stream>]: )
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
@@ -132,8 +133,8 @@ matter, and only that first block is read:
 each output line (`true` always, `false` never; omit it to prefix only when
 several hosts are selected). `prefix-format` is the template for those labels.
 Omitting `pty` leaves the terminal off, the same as the command line.
-`--user`, `--pty` / `--no-pty`, `--no-prefix`, and `--prefix-format` override
-the header.
+`--user`, `--pty` / `--no-pty`, `--prefix` / `--no-prefix`, and
+`--prefix-format` override the header.
 
 `tues-provider` is a JSON string (`cl`, `file`, or a provider name) and
 `tues-provider-args` is a JSON array of strings passed to that provider. They
@@ -152,10 +153,10 @@ prefixed with `[<name>/<stream>]: ` by default (`stdout`, `stderr`, or `pty`),
 and the exit status is `0` only if every host succeeded. `--prefix-format`
 changes the template; placeholders are `<name>` (the provider host string),
 `<server-ip>`, `<client-port>`, `<server-port>`, and `<stream>`. With one host,
-output is passed through unchanged and the exit status is the remote one
-(`255` on connection errors, like `ssh`). `--check` stops at the first host
-that fails or exits non-zero; it is rejected when more than one job runs at a
-time.
+output is passed through unchanged unless `--prefix` is set, and the exit
+status is the remote one (`255` on connection errors, like `ssh`). `--check`
+stops at the first host that fails or exits non-zero; it is rejected when more
+than one job runs at a time.
 
 ```sh
 cargo install --path crates/tues-cli

@@ -38,6 +38,32 @@ fn single_host_streams_raw_output_and_exit_code() {
 }
 
 #[test]
+fn prefix_forces_labels_on_a_single_host() {
+    let f = sshd();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--prefix")
+        .arg("echo hello; echo oops >&2")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("[{}/stdout]: hello\n", f.host)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!("[{}/stderr]: oops\n", f.host)
+    );
+}
+
+#[test]
 fn multiple_hosts_with_sudo_and_prefixes() {
     let f = sshd();
     let out = tues()
