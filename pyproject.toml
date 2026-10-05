@@ -5,6 +5,7 @@ build-backend = "maturin"
 [project]
 name = "tues"
 description = "Remote command execution over SSH/SFTP with sudo elevation (sync and asyncio)"
+readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
 classifiers = [
