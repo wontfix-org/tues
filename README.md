@@ -657,10 +657,10 @@ just release 0.2.0 --python 3.12
 just release 0.2.0 --upload
 ```
 
-By default that is Python 3.9, 3.11, 3.12 and 3.13. The build runs in the
+By default that is Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14. The build runs in the
 `ghcr.io/pyo3/maturin` manylinux2014 container, which supplies those CPython
 builds and a glibc old enough for the `manylinux2014` tag. Each wheel is
-tagged for its interpreter (`cp39`, `cp311`, `cp312`, `cp313`). The sdist is
+tagged for its interpreter (`cp39`, `cp310`, `cp311`, `cp312`, `cp313`, `cp314`). The sdist is
 built first and the wheels are built from it. Change the set with
 `--python 3.12,3.13` or `TUES_PYTHON_VERSIONS`. Docker is required.
 

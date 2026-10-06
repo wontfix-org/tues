@@ -2,7 +2,7 @@
 """Set the workspace version, tag it, and build PyPI artifacts.
 
 Usage: scripts/release [--dry-run] [--preview] [--rc] [--upload]
-                       [--python 3.9,3.11,3.12,3.13] [VERSION]
+                       [--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). The script commits the version bump, creates an annotated tag
@@ -30,7 +30,7 @@ and uv will not install it unless that version is requested or --pre is
 given. The candidate is committed and tagged. dist/latest and dist/rc point
 at it.
 
-The default interpreters are Python 3.9, 3.11, 3.12 and 3.13. Override them
+The default interpreters are Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14. Override them
 with --python or TUES_PYTHON_VERSIONS (comma or space separated). Wheels are
 built in the maturin manylinux2014 container, which carries those CPython
 builds, so each wheel is tagged for that interpreter and for manylinux2014
@@ -54,8 +54,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CARGO_TOML = ROOT / "Cargo.toml"
 DIST = ROOT / "dist"
 
-DEFAULT_PYTHONS = ["3.9", "3.11", "3.12", "3.13"]
-# manylinux2014 image: maturin, stable Rust, and CPython 3.9–3.13 on PATH.
+DEFAULT_PYTHONS = ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+# manylinux2014 image: maturin, stable Rust, and CPython 3.9–3.14 on PATH.
 IMAGE = "ghcr.io/pyo3/maturin:v1.15.0"
 # Path dependencies in Cargo.toml that pin the workspace version.
 VERSIONED_PATH_DEPS = 5
@@ -87,7 +87,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         prog="scripts/release",
         usage=(
             "scripts/release [--dry-run] [--preview] [--rc] [--upload] "
-            "[--python 3.9,3.11,3.12,3.13] [VERSION]"
+            "[--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
     )
