@@ -643,6 +643,57 @@ fn missing_provider_and_host_file_are_errors() {
 }
 
 #[test]
+fn unknown_options_are_not_taken_as_command_or_provider() {
+    // clap would otherwise fold an unknown flag into trailing_var_arg and look
+    // for tues-provider--p (or similar).
+    let out = tues_bin()
+        .args(["-P", "-p", "-s", "kick-wait", "cl", "h"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unexpected argument '-P'"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("tues-provider-"),
+        "must not invent a provider from the unknown option: {stderr}"
+    );
+
+    let out = tues_bin().args(["true", "-Z", "host"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unexpected argument '-Z'"),
+        "{stderr}"
+    );
+
+    let dir = std::env::temp_dir().join(format!("tues-cli-unknown-opt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("tool");
+    std::fs::write(&script, "#!/bin/sh\n").unwrap();
+    let out = tues_bin()
+        .args([
+            "-s",
+            script.to_str().unwrap(),
+            "--not-a-flag",
+            "cl",
+            "h",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unexpected argument '--not-a-flag'"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn external_provider_supplies_hosts_and_receives_its_options() {
     let f = sshd();
     let dir = std::env::temp_dir().join(format!("tues-cli-provider-{}", std::process::id()));

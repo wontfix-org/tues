@@ -701,7 +701,7 @@ fn selected_provider(
     cli: &Cli,
     defaults: Option<&ScriptDefaults>,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    if let Some((name, args)) = positional_provider(cli) {
+    if let Some((name, args)) = positional_provider(cli)? {
         return Ok((name.to_string(), args.to_vec()));
     }
     if cli.script.is_some() {
@@ -721,10 +721,27 @@ fn selected_provider(
 /// Provider token and the arguments that belong to it, when the command line
 /// has one. With `--script` the remote command is not a positional, so the
 /// provider is the first one.
-fn positional_provider(cli: &Cli) -> Option<(&str, &[String])> {
+fn positional_provider(cli: &Cli) -> anyhow::Result<Option<(&str, &[String])>> {
     let provider_at = if cli.script.is_some() { 0 } else { 1 };
-    let name = cli.args.get(provider_at)?;
-    Some((name, cli.args.get(provider_at + 1..).unwrap_or(&[])))
+    let Some(name) = cli.args.get(provider_at) else {
+        return Ok(None);
+    };
+    // clap's trailing_var_arg + allow_hyphen_values swallows unknown flags into
+    // `args`. A provider name that looks like an option is almost always one of
+    // those, not a real provider.
+    if looks_like_cli_option(name) {
+        anyhow::bail!("unexpected argument '{name}'");
+    }
+    Ok(Some((name, cli.args.get(provider_at + 1..).unwrap_or(&[]))))
+}
+
+/// `-` / `--` are positionals; anything else that starts with `-` looks like a flag.
+///
+/// Unknown tues options must not be taken as the command or provider: with
+/// `allow_hyphen_values` on the trailing args, clap would otherwise treat
+/// `tues -P …` as a command of `-P`.
+fn looks_like_cli_option(s: &str) -> bool {
+    s.starts_with('-') && s != "-" && s != "--"
 }
 
 fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
@@ -732,6 +749,9 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
         let Some(command) = cli.args.first() else {
             anyhow::bail!("a command is required");
         };
+        if looks_like_cli_option(command) {
+            anyhow::bail!("unexpected argument '{command}'");
+        }
         return Ok((
             Run {
                 command: command.clone(),
@@ -1899,6 +1919,46 @@ echo hi
         let cli = super::Cli::try_parse_from(["tues", "true"]).unwrap();
         let err = super::selected_provider(&cli, None).unwrap_err();
         assert!(err.to_string().contains("after the command"), "{err}");
+    }
+
+    #[test]
+    fn option_looking_command_or_provider_is_an_unexpected_argument() {
+        // Unknown flags must not become the command / provider via trailing_var_arg.
+        let cli = super::Cli::try_parse_from(["tues", "-P", "-p", "-s", "tool", "cl", "h"]).unwrap();
+        let err = super::prepare_run(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected argument '-P'"),
+            "{err}"
+        );
+
+        let cli = super::Cli::try_parse_from(["tues", "--no-such-flag", "true", "cl", "h"]).unwrap();
+        let err = super::prepare_run(&cli).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unexpected argument '--no-such-flag'"),
+            "{err}"
+        );
+
+        let cli = super::Cli::try_parse_from(["tues", "true", "-Z", "h"]).unwrap();
+        let err = super::selected_provider(&cli, None).unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected argument '-Z'"),
+            "{err}"
+        );
+
+        let cli = super::Cli::try_parse_from(["tues", "-s", "tool", "--bad", "x"]).unwrap();
+        let err = super::selected_provider(&cli, None).unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected argument '--bad'"),
+            "{err}"
+        );
+
+        // Provider args may still look like options.
+        let cli =
+            super::Cli::try_parse_from(["tues", "true", "cl", "--site", "nyc", "-x"]).unwrap();
+        let (name, args) = super::selected_provider(&cli, None).unwrap();
+        assert_eq!(name, "cl");
+        assert_eq!(args, ["--site", "nyc", "-x"]);
     }
 
     #[test]
