@@ -61,7 +61,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
       --connect-timeout <S>  Connection timeout in seconds
-      --prefix               Prefix output lines even on a single host
+  -P, --prefix               Prefix output lines even on a single host
       --no-prefix            Do not prefix output lines
       --prefix-format <FMT>  Line prefix template (default: [<name>/<stream>]: )
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command

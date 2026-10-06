@@ -645,15 +645,15 @@ fn missing_provider_and_host_file_are_errors() {
 #[test]
 fn unknown_options_are_not_taken_as_command_or_provider() {
     // clap would otherwise fold an unknown flag into trailing_var_arg and look
-    // for tues-provider--p (or similar).
+    // for tues-provider--q (or similar).
     let out = tues_bin()
-        .args(["-P", "-p", "-s", "kick-wait", "cl", "h"])
+        .args(["-Q", "-p", "-s", "kick-wait", "cl", "h"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("unexpected argument '-P'"),
+        stderr.contains("unexpected argument '-Q'"),
         "{stderr}"
     );
     assert!(

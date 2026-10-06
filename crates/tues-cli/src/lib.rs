@@ -148,7 +148,7 @@ struct Cli {
     connect_timeout: Option<u64>,
 
     /// Prefix output lines even when running on a single host.
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_prefix")]
+    #[arg(short = 'P', long, action = clap::ArgAction::SetTrue, overrides_with = "no_prefix")]
     prefix: bool,
 
     /// Do not prefix output lines, even when running on several hosts.
@@ -739,7 +739,7 @@ fn positional_provider(cli: &Cli) -> anyhow::Result<Option<(&str, &[String])>> {
 ///
 /// Unknown tues options must not be taken as the command or provider: with
 /// `allow_hyphen_values` on the trailing args, clap would otherwise treat
-/// `tues -P …` as a command of `-P`.
+/// `tues -Q …` as a command of `-Q`.
 fn looks_like_cli_option(s: &str) -> bool {
     s.starts_with('-') && s != "-" && s != "--"
 }
@@ -1924,10 +1924,10 @@ echo hi
     #[test]
     fn option_looking_command_or_provider_is_an_unexpected_argument() {
         // Unknown flags must not become the command / provider via trailing_var_arg.
-        let cli = super::Cli::try_parse_from(["tues", "-P", "-p", "-s", "tool", "cl", "h"]).unwrap();
+        let cli = super::Cli::try_parse_from(["tues", "-Q", "-p", "-s", "tool", "cl", "h"]).unwrap();
         let err = super::prepare_run(&cli).unwrap_err();
         assert!(
-            err.to_string().contains("unexpected argument '-P'"),
+            err.to_string().contains("unexpected argument '-Q'"),
             "{err}"
         );
 
@@ -2100,6 +2100,8 @@ echo hi
             super::Cli::try_parse_from(["tues", "--prefix", "--no-prefix", "true", "cl", "h"])
                 .unwrap();
         assert_eq!(off.prefix_setting(), Some(false));
+        let short = super::Cli::try_parse_from(["tues", "-P", "true", "cl", "h"]).unwrap();
+        assert_eq!(short.prefix_setting(), Some(true));
         let plain = super::Cli::try_parse_from(["tues", "true", "cl", "h"]).unwrap();
         assert_eq!(plain.prefix_setting(), None);
     }
