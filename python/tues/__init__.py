@@ -36,10 +36,13 @@ process running on another machine:
   (``None`` values unset a variable).
 * ``pid`` is always ``None``; ``returncode`` is ``-N`` for signal ``N`` as on
   POSIX.
-* Extra keyword arguments: ``user`` and ``pty``. ``user`` is a name (run via
-  ``sudo -u``) or ``LOGIN_USER`` (run as the login user, never via sudo,
-  even when the session has a default ``user``); leaving it out inherits
-  the session default.
+* Extra keyword arguments: ``user``, ``pty``, and ``executable``. ``user`` is
+  a name (run via ``sudo -u``) or ``LOGIN_USER`` (run as the login user,
+  never via sudo, even when the session has a default ``user``); leaving it
+  out inherits the session default. ``executable`` is the shell used when
+  ``shell=True`` (default ``sh``). Connecting with ``user_shell=True`` looks
+  up the target user's login shell once and uses that instead, unless
+  ``executable`` is set.
 """
 
 from __future__ import annotations

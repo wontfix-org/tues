@@ -64,6 +64,64 @@ async fn stderr_and_exit_status() {
 }
 
 #[tokio::test]
+async fn here_string_needs_a_shell_that_understands_it() {
+    let s = connect().await;
+    let out = s.shell("cat <<<foo").output().await.unwrap();
+    assert!(
+        !out.status.success(),
+        "sh should reject a here-string: {out:?}"
+    );
+    assert!(
+        out.stderr_lossy().contains("Syntax error"),
+        "stderr={}",
+        out.stderr_lossy()
+    );
+
+    let out = s
+        .shell("cat <<<foo")
+        .shell_program("bash")
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"foo\n", "stderr={}", out.stderr_lossy());
+
+    let out = s
+        .shell("cat <<<foo")
+        .shell_program("bash")
+        .user("root")
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success(), "sudo {out:?}");
+    assert_eq!(out.stdout, b"foo\n", "sudo stderr={}", out.stderr_lossy());
+}
+
+#[tokio::test]
+async fn user_shell_uses_the_login_shell() {
+    let opts = sshd().connect_options().user_shell(true);
+    let s = Session::connect(opts).await.expect("connect");
+    let out = s.shell("cat <<<foo").output().await.unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"foo\n", "stderr={}", out.stderr_lossy());
+
+    let out = s.shell("cat <<<foo").user("root").output().await.unwrap();
+    assert!(out.status.success(), "sudo {out:?}");
+    assert_eq!(out.stdout, b"foo\n", "sudo stderr={}", out.stderr_lossy());
+
+    let out = s
+        .shell("cat <<<foo")
+        .shell_program("sh")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "an explicit shell wins over the login shell: {out:?}"
+    );
+}
+
+#[tokio::test]
 async fn env_and_cwd() {
     let s = connect().await;
     let out = s

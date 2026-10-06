@@ -4,7 +4,7 @@ Implemented on :class:`tues.Session` and kept so existing callers keep
 working. New code should use :class:`tues.Session` directly; this module is
 meant to be removed.
 
-A command is still a shell line (``sh -c``), files are uploaded for the
+A command is still a shell line (``bash -c``), files are uploaded for the
 duration of the command, and ``sudo`` is used when ``user`` is not the login
 user. Connection details the original API did not have (identity files, host
 keys, timeouts, …) go in ``connect_options`` and are forwarded to
@@ -929,6 +929,7 @@ def _execute(task: Task, pm: PasswordManager, stdout_arg, stderr_arg, connect_op
         proc = session.Popen(
             task.cmd,
             shell=True,
+            executable="bash",
             stdin=PIPE if payload is not None else DEVNULL,
             stdout=PIPE if stdout_sink is not None else DEVNULL,
             stderr=DEVNULL if stderr_sink is None else PIPE,

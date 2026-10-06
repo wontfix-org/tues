@@ -96,6 +96,12 @@ impl Command {
         self
     }
 
+    /// Run a shell command with `shell` instead of `sh`.
+    pub fn shell_program(mut self, shell: impl Into<String>) -> Self {
+        self.inner.shell_program(shell);
+        self
+    }
+
     pub fn as_inner(&self) -> &tues_core::Command {
         &self.inner
     }

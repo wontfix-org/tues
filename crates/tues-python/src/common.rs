@@ -418,6 +418,7 @@ const CONNECT_KEYS: &[&str] = &[
     "ssh_config",
     "password",
     "password_manager",
+    "user_shell",
 ];
 
 fn v_has_invalidate(src: &PyPasswordSource) -> PyResult<bool> {
@@ -433,6 +434,9 @@ pub fn connect_options(
     o.login_user = kw(kwargs, "login_user")?;
     o.port = kw(kwargs, "port")?;
     o.user = kw(kwargs, "user")?;
+    if kw::<bool>(kwargs, "user_shell")? == Some(true) {
+        o = o.user_shell(true);
+    }
     o.host_name = kw(kwargs, "host_name")?;
     if let Some(files) = kw::<Vec<PathBuf>>(kwargs, "identity_files")? {
         o.identity_files = files;
@@ -514,7 +518,16 @@ pub fn connect_options(
 // Command from Python
 // ---------------------------------------------------------------------------
 
-const COMMAND_KEYS: &[&str] = &["user", "pty", "env", "cwd", "stdin", "stdout", "stderr"];
+const COMMAND_KEYS: &[&str] = &[
+    "user",
+    "pty",
+    "env",
+    "cwd",
+    "stdin",
+    "stdout",
+    "stderr",
+    "executable",
+];
 
 /// `subprocess.PIPE`.
 pub const PIPE: i32 = -1;
@@ -543,7 +556,8 @@ fn parse_stdio(name: &str, v: Option<i32>) -> PyResult<Stdio> {
 ///
 /// With `shell=True`, `argv[0]` is a shell script run by `sh -c` and the
 /// remaining elements become its positional parameters (`$0`, `$1`, ...),
-/// exactly like `subprocess` with `shell=True`.
+/// exactly like `subprocess` with `shell=True`. `executable` replaces `sh`,
+/// the same way `subprocess` uses it as the shell.
 pub fn command(
     argv: Vec<String>,
     shell: bool,
@@ -554,7 +568,11 @@ pub fn command(
         .split_first()
         .ok_or_else(|| PyValueError::new_err("args must not be empty"))?;
     let mut c = if shell {
-        tues_core::Command::shell(program)
+        let mut c = tues_core::Command::shell(program);
+        if let Some(exe) = kw::<String>(kwargs, "executable")? {
+            c.shell_program(exe);
+        }
+        c
     } else {
         tues_core::Command::new(program)
     };

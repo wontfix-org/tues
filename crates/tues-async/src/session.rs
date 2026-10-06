@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +41,9 @@ pub(crate) struct Inner {
     /// SFTP channel for [`Session::stat`] and the other file helpers.
     /// Separate from channels returned by [`Session::sftp`].
     files: Mutex<Option<Sftp>>,
+    /// Login shells already read for [`ResolvedOptions::user_shell`], keyed
+    /// by the user the command runs as.
+    shells: Mutex<HashMap<String, String>>,
     /// Keeps the jump host connection alive for the lifetime of this session.
     _via: Option<Session>,
     /// Peer address of a direct TCP connection. Absent when connected via a jump host.
@@ -141,17 +145,23 @@ impl Session {
 
         authenticate(&mut handle, &opts).await?;
 
-        Ok(Session {
+        let session = Session {
             inner: Arc::new(Inner {
                 handle,
                 opts,
                 closed: AtomicBool::new(false),
                 files: Mutex::new(None),
+                shells: Mutex::new(HashMap::new()),
                 _via: via,
                 peer_addr,
                 local_addr,
             }),
-        })
+        };
+        if session.inner.opts.user_shell {
+            let user = session.user().unwrap_or(session.login_user()).to_string();
+            session.login_shell(&user).await?;
+        }
+        Ok(session)
     }
 
     /// The resolved connection settings.
@@ -189,7 +199,12 @@ impl Session {
         Command::new(self.clone(), tues_core::Command::new(program))
     }
 
-    /// Build a raw shell command (`sh -c`) bound to this session.
+    /// Build a raw shell command bound to this session.
+    ///
+    /// The command runs with `sh -c` unless [`Command::shell_program`] selects
+    /// another interpreter, or the session was opened with
+    /// [`ConnectOptions::user_shell`] and has resolved the target user's
+    /// login shell.
     pub fn shell(&self, command_line: impl Into<String>) -> Command {
         Command::new(self.clone(), tues_core::Command::shell(command_line))
     }
@@ -226,8 +241,71 @@ impl Session {
         default_stdio: Stdio,
     ) -> Result<Child> {
         self.ensure_open()?;
+        let shell = self.resolved_shell(cmd).await?;
+        self.spawn_planned(cmd, default_stdio, shell.as_deref())
+            .await
+    }
+
+    /// Shell to pass into [`tues_core::Command::plan_with`].
+    ///
+    /// An argv command, a command that set its own interpreter, and a session
+    /// that did not ask for the user's shell, all return `None` so planning
+    /// stays on `sh` (or the command's own program).
+    async fn resolved_shell(&self, cmd: &tues_core::Command) -> Result<Option<String>> {
+        if !cmd.is_shell() || cmd.get_shell_program().is_some() || !self.inner.opts.user_shell {
+            return Ok(None);
+        }
+        let user = cmd
+            .effective_user(self.inner.opts.user.as_deref())
+            .unwrap_or(self.inner.opts.login_user.as_str())
+            .to_string();
+        Ok(Some(self.login_shell(&user).await?))
+    }
+
+    /// Login shell of `user`, read once and cached.
+    ///
+    /// The probe runs as the login user with `sh`, so it does not depend on
+    /// the shell it is looking up and does not go through sudo.
+    async fn login_shell(&self, user: &str) -> Result<String> {
+        if let Some(shell) = self.inner.shells.lock().await.get(user).cloned() {
+            return Ok(shell);
+        }
+        let mut cmd = tues_core::Command::shell(login_shell_script(user));
+        cmd.as_login_user().stdin(Stdio::Null);
+        let out = self
+            .spawn_planned(&cmd, Stdio::Piped, None)
+            .await?
+            .wait_with_output()
+            .await?;
+        if !out.status.success() {
+            return Err(Error::Other(format!(
+                "could not read login shell for {user}: {}",
+                out.stderr_lossy()
+            )));
+        }
+        let shell = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let shell = if shell.is_empty() {
+            "sh".to_string()
+        } else {
+            shell
+        };
+        self.inner
+            .shells
+            .lock()
+            .await
+            .insert(user.to_string(), shell.clone());
+        Ok(shell)
+    }
+
+    async fn spawn_planned(
+        &self,
+        cmd: &tues_core::Command,
+        default_stdio: Stdio,
+        shell: Option<&str>,
+    ) -> Result<Child> {
+        self.ensure_open()?;
         let opts = &self.inner.opts;
-        let plan = cmd.plan(default_stdio, opts.user.as_deref());
+        let plan = cmd.plan_with(default_stdio, opts.user.as_deref(), shell);
         let password_request = plan.sudo.as_ref().map(|s| {
             PasswordRequest::sudo(
                 opts.alias.clone(),
@@ -1078,6 +1156,19 @@ pub(crate) fn channel_event(msg: ChannelMsg) -> Option<tues_core::Event> {
         ChannelMsg::ExitSignal { signal_name, .. } => Event::ExitSignal(sig_name(&signal_name)),
         _ => return None,
     })
+}
+
+/// `sh` script that prints the login shell of `user`.
+///
+/// `getent` is preferred. `/etc/passwd` covers a host without it. An empty
+/// shell field means `sh`, as POSIX specifies.
+fn login_shell_script(user: &str) -> String {
+    let u = tues_core::shell::quote(user);
+    format!(
+        "entry=$(getent passwd {u} 2>/dev/null) || entry=$(awk -F: -v u={u} '$1==u {{print; exit}}' /etc/passwd); \
+if [ -z \"$entry\" ]; then echo 'no passwd entry' >&2; exit 1; fi; \
+shell=${{entry##*:}}; if [ -z \"$shell\" ]; then shell=sh; fi; printf %s \"$shell\""
+    )
 }
 
 fn sig_name(sig: &russh::Sig) -> String {

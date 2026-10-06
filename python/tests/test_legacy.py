@@ -391,6 +391,28 @@ def test_output_dir_abort(tmp_path):
         tues.run("localhost", "true", output_dir=str(output), output_dir_strategy=tues.DIR_ABORT)
 
 
+def test_run_here_string(sshd):
+    task = tues.run(
+        sshd.host,
+        "cat <<<foo",
+        capture_output=True,
+        text=True,
+        connect_options=_opts(sshd),
+    )
+    assert task.returncode == 0
+    assert task.stdout == "foo\n"
+    task = tues.run(
+        sshd.host,
+        "cat <<<foo",
+        user="root",
+        capture_output=True,
+        text=True,
+        connect_options=_opts(sshd),
+    )
+    assert task.returncode == 0
+    assert task.stdout == "foo\n"
+
+
 def test_run_text_and_argv(sshd):
     task = tues.run(
         sshd.host,

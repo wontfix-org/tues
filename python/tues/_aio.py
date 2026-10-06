@@ -381,6 +381,7 @@ class AsyncSession:
         env: Optional[Mapping[str, Optional[str]]],
         user: _common.User,
         pty: bool,
+        executable: Optional[str] = None,
     ) -> Process:
         for name, v in (("stdin", stdin), ("stdout", stdout)):
             if v not in (None, PIPE, DEVNULL):
@@ -402,6 +403,7 @@ class AsyncSession:
             env=_common.normalize_env(env),
             user=user,
             pty=pty,
+            executable=executable,
         )
         return Process(child, limit)
 
@@ -436,6 +438,7 @@ class AsyncSession:
         env: Optional[Mapping[str, Optional[str]]] = None,
         user: _common.User = None,
         pty: bool = False,
+        executable: Optional[str] = None,
     ) -> Process:
         """Run ``cmd`` in the remote shell; see :func:`asyncio.create_subprocess_shell`."""
         if not isinstance(cmd, (str, bytes)):
@@ -443,7 +446,7 @@ class AsyncSession:
         argv = _common.normalize_args(cmd)
         return await self._spawn(
             argv, True, stdin=stdin, stdout=stdout, stderr=stderr, limit=limit, cwd=cwd, env=env,
-            user=user, pty=pty,
+            user=user, pty=pty, executable=executable,
         )
 
     async def run(
@@ -467,6 +470,7 @@ class AsyncSession:
         limit: int = _DEFAULT_LIMIT,
         user: _common.User = None,
         pty: bool = False,
+        executable: Optional[str] = None,
     ) -> CompletedProcess:
         """Run a command to completion; the asyncio twin of :func:`subprocess.run`."""
         if input is not None:
@@ -490,7 +494,7 @@ class AsyncSession:
         argv = _common.normalize_args(args)
         process = await self._spawn(
             argv, shell, stdin=stdin, stdout=stdout, stderr=stderr, limit=limit, cwd=cwd, env=env,
-            user=user, pty=pty,
+            user=user, pty=pty, executable=executable,
         )
         # Chunks are collected outside the awaited coroutine so that output
         # read before a timeout survives the cancellation.

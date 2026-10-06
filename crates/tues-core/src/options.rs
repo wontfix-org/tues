@@ -199,6 +199,9 @@ pub struct ConnectOptions {
     /// Default user commands run as. `None` means the login user; any other
     /// value runs commands via `sudo -u`.
     pub user: Option<String>,
+    /// Resolve the target user's login shell once and use it for shell
+    /// commands. `false` (the default) uses `sh`.
+    pub user_shell: bool,
     pub password_manager: Option<SharedPasswordManager>,
     /// `BatchMode`. `yes` refuses a password manager that would prompt.
     pub batch_mode: Option<bool>,
@@ -398,6 +401,18 @@ impl ConnectOptions {
     /// Run commands as `user` via `sudo -u`, unless a command says otherwise.
     pub fn user(mut self, user: impl Into<String>) -> Self {
         self.user = Some(user.into());
+        self
+    }
+
+    /// Look up the target user's login shell once per user and run shell
+    /// commands with it.
+    ///
+    /// The lookup happens when the session connects (for the session's
+    /// command user, or the login user) and again before the first command
+    /// that runs as some other user. The result is cached. A command that
+    /// sets its own interpreter is unchanged. `false` keeps `sh`.
+    pub fn user_shell(mut self, yes: bool) -> Self {
+        self.user_shell = yes;
         self
     }
 
@@ -627,6 +642,7 @@ impl ConnectOptions {
             },
             request_tty: params.request_tty.unwrap_or(false),
             user: self.user.clone(),
+            user_shell: self.user_shell,
             password_manager,
             ssh_config: config.cloned(),
             batch_mode: self.batch_mode.or(params.batch_mode).unwrap_or(false),
@@ -689,6 +705,8 @@ pub struct ResolvedOptions {
     pub request_tty: bool,
     /// Default user commands run as. `None` means the login user.
     pub user: Option<String>,
+    /// Use the target user's login shell for shell commands.
+    pub user_shell: bool,
     pub password_manager: SharedPasswordManager,
     /// The config used, so jump hosts resolve against the same file.
     pub ssh_config: Option<SshConfig>,
@@ -763,6 +781,7 @@ impl ResolvedOptions {
                 None => SshConfigSource::None,
             },
             user: None,
+            user_shell: false,
             password_manager: Some(self.password_manager.clone()),
             batch_mode: Some(self.batch_mode),
             connection_attempts: Some(self.connection_attempts),

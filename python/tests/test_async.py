@@ -18,6 +18,19 @@ async def connect(sshd, **overrides):
     return await tues.AsyncSession.connect(f"{USER}@{sshd.host}", **sshd.connect_kwargs(**overrides))
 
 
+def test_executable_selects_the_shell(sshd):
+    async def main():
+        async with await connect(sshd) as s:
+            out = await s.run(
+                "cat <<<foo", shell=True, executable="bash", capture_output=True, text=True
+            )
+            assert out.returncode == 0 and out.stdout == "foo\n"
+            out = await s.run("cat <<<foo", shell=True, capture_output=True, text=True)
+            assert out.returncode != 0
+
+    run(main())
+
+
 def test_run_and_properties(sshd):
     async def main():
         async with await connect(sshd) as s:

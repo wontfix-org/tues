@@ -37,6 +37,24 @@ def test_connect_classmethod(sshd):
 # ---------------------------------------------------------------------------
 
 
+def test_executable_selects_the_shell(session):
+    out = session.run("cat <<<foo", shell=True, executable="bash", capture_output=True, text=True)
+    assert out.returncode == 0
+    assert out.stdout == "foo\n"
+    out = session.run("cat <<<foo", shell=True, capture_output=True, text=True)
+    assert out.returncode != 0
+
+
+def test_user_shell_uses_the_login_shell(sshd):
+    with tues.Session(f"{USER}@{sshd.host}", **sshd.connect_kwargs(user_shell=True)) as s:
+        out = s.run("cat <<<foo", shell=True, capture_output=True, text=True)
+        assert out.returncode == 0 and out.stdout == "foo\n"
+        out = s.run("cat <<<foo", shell=True, user="root", capture_output=True, text=True)
+        assert out.returncode == 0 and out.stdout == "foo\n"
+        out = s.run("cat <<<foo", shell=True, executable="sh", capture_output=True, text=True)
+        assert out.returncode != 0
+
+
 def test_run_shell(session):
     out = session.run("echo hello; echo err >&2; exit 3", shell=True, capture_output=True)
     assert isinstance(out, tues.CompletedProcess)

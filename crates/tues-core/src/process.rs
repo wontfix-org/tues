@@ -156,6 +156,8 @@ pub struct Command {
     stderr: Option<Stdio>,
     pty: Option<PtyConfig>,
     user: CommandUser,
+    /// Interpreter for a shell command. `None` means `sh`.
+    shell_program: Option<String>,
 }
 
 /// Which user a command runs as.
@@ -184,10 +186,14 @@ impl Command {
             stderr: None,
             pty: None,
             user: CommandUser::Inherit,
+            shell_program: None,
         }
     }
 
     /// A raw shell command line, interpreted by `sh -c` on the remote host.
+    ///
+    /// [`Command::shell_program`] selects another interpreter. The default
+    /// stays `sh` so a shell command is POSIX wherever `sh` is.
     pub fn shell(command_line: impl Into<String>) -> Self {
         let mut c = Command::new("");
         c.program = Program::Shell(command_line.into());
@@ -284,10 +290,32 @@ impl Command {
         self
     }
 
+    /// Run a shell command with `shell` instead of `sh`.
+    ///
+    /// `shell` is a program name or path (`bash`, `/bin/zsh`). It is quoted
+    /// and invoked as `{shell} -c`. An empty string selects `sh`. Argv
+    /// commands ignore this. A session that has resolved the target user's
+    /// login shell uses that only when this is unset.
+    pub fn shell_program(&mut self, shell: impl Into<String>) -> &mut Self {
+        let shell = shell.into();
+        self.shell_program = if shell.is_empty() { None } else { Some(shell) };
+        self
+    }
+
+    /// Interpreter set with [`Command::shell_program`], if any.
+    pub fn get_shell_program(&self) -> Option<&str> {
+        self.shell_program.as_deref()
+    }
+
+    /// Whether this is a shell command (`sh -c` or another interpreter).
+    pub fn is_shell(&self) -> bool {
+        matches!(self.program, Program::Shell(_))
+    }
+
     pub fn get_program(&self) -> &str {
         match &self.program {
             Program::Argv(p) => p,
-            Program::Shell(_) => "sh",
+            Program::Shell(_) => self.interpreter(None),
         }
     }
 
@@ -332,8 +360,20 @@ impl Command {
         self.stderr
     }
 
+    /// Program that runs a shell command: the one set on the command, else
+    /// `fallback` (a session-resolved login shell), else `sh`.
+    fn interpreter<'a>(&'a self, fallback: Option<&'a str>) -> &'a str {
+        self.shell_program
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(fallback)
+            .unwrap_or("sh")
+    }
+
     /// The command line as it would run without `sudo`, including `cd` and `env`.
-    fn plain_command_line(&self) -> String {
+    ///
+    /// `shell` is used for a shell command when the command did not set one.
+    fn plain_command_line(&self, shell: Option<&str>) -> String {
         let mut line = String::new();
         if let Some(dir) = &self.cwd {
             line.push_str("cd ");
@@ -369,7 +409,8 @@ impl Command {
                 }
             }
             Program::Shell(s) => {
-                line.push_str("sh -c ");
+                line.push_str(&shell::quote(self.interpreter(shell)));
+                line.push_str(" -c ");
                 line.push_str(&shell::quote(s));
                 for a in &self.args {
                     line.push(' ');
@@ -386,16 +427,30 @@ impl Command {
     /// (e.g. `Piped` for `spawn`, `Inherit` for `status`). `session_user`
     /// is the session's default user for commands that do not set one.
     pub fn plan(&self, default_stdio: Stdio, session_user: Option<&str>) -> ExecPlan {
+        self.plan_with(default_stdio, session_user, None)
+    }
+
+    /// Like [`Command::plan`], using `shell` for a shell command that did not
+    /// set [`Command::shell_program`].
+    ///
+    /// `shell` is the target user's login shell when the session resolved one.
+    /// `None` keeps the default, `sh`.
+    pub fn plan_with(
+        &self,
+        default_stdio: Stdio,
+        session_user: Option<&str>,
+        shell: Option<&str>,
+    ) -> ExecPlan {
         let sudo = self
             .effective_user(session_user)
             .map(|user| SudoPlan::new(user.to_string()));
         let command_line = match &sudo {
-            None => self.plain_command_line(),
+            None => self.plain_command_line(shell),
             Some(s) => {
                 let script = format!(
                     "printf %s {}; {}",
                     shell::quote(&s.marker_str()),
-                    self.plain_command_line()
+                    self.plain_command_line(shell)
                 );
                 format!(
                     "sudo -S -k -p {} -u {} -- /bin/sh -c {}",
@@ -498,6 +553,44 @@ mod tests {
         assert_eq!(
             c.plan(Stdio::Piped, None).command_line,
             "sh -c 'ls -l | wc -l'"
+        );
+    }
+
+    #[test]
+    fn shell_program_replaces_sh_and_wins_over_the_session_shell() {
+        let mut c = Command::shell("cat <<<foo");
+        c.shell_program("bash");
+        assert_eq!(c.get_program(), "bash");
+        assert_eq!(c.get_shell_program(), Some("bash"));
+        assert_eq!(
+            c.plan_with(Stdio::Piped, None, Some("/bin/zsh"))
+                .command_line,
+            "bash -c 'cat <<<foo'"
+        );
+        let mut c = Command::shell("echo hi");
+        c.user("root").shell_program("/bin/bash");
+        let line = c.plan(Stdio::Piped, None).command_line;
+        assert!(line.starts_with("sudo "), "{line}");
+        assert!(line.contains("/bin/sh -c "), "{line}");
+        assert!(line.contains("/bin/bash -c "), "{line}");
+        assert!(line.contains("echo hi"), "{line}");
+    }
+
+    #[test]
+    fn session_shell_is_used_when_the_command_does_not_set_one() {
+        let c = Command::shell("echo hi");
+        assert_eq!(
+            c.plan_with(Stdio::Piped, None, Some("/bin/bash"))
+                .command_line,
+            "/bin/bash -c 'echo hi'"
+        );
+        let mut c = Command::shell("echo hi");
+        c.shell_program("");
+        assert_eq!(c.get_shell_program(), None);
+        assert_eq!(
+            c.plan_with(Stdio::Piped, None, Some("/bin/bash"))
+                .command_line,
+            "/bin/bash -c 'echo hi'"
         );
     }
 

@@ -34,7 +34,9 @@ impl Session {
     /// Connect to `destination` (`host`, `login-user@host`, `host:port`, or an
     /// ssh_config alias).
     ///
-    /// Keyword arguments: login_user, port, user, host_name, identity_files,
+    /// Keyword arguments: login_user, port, user, user_shell (look up the
+    /// target user's login shell and run shell commands with it; default
+    /// keeps ``sh``), host_name, identity_files,
     /// identities_only, proxy_jump, connect_timeout, server_alive_interval,
     /// compression, use_agent, pubkey_authentication,
     /// password_authentication, host_key_policy ("strict" | "accept-new" |
@@ -89,7 +91,8 @@ impl Session {
     ///
     /// `args` is an argv list; with `shell=True`, `args[0]` is a shell
     /// script and the rest are its positional parameters. Keyword arguments:
-    /// user, as_login_user, pty, env (dict; None removes), cwd, and
+    /// user, pty, env (dict; None removes), cwd, executable (shell when
+    /// `shell` is true; default `sh`), and
     /// stdin/stdout/stderr (None = inherit, PIPE, DEVNULL).
     #[pyo3(signature = (args, shell = false, **kwargs))]
     fn spawn(

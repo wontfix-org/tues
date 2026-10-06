@@ -85,6 +85,12 @@ impl Session {
         Command::new(self.clone(), tues_core::Command::new(program))
     }
 
+    /// Build a raw shell command bound to this session.
+    ///
+    /// The command runs with `sh -c` unless [`Command::shell_program`] selects
+    /// another interpreter, or the session was opened with
+    /// [`ConnectOptions::user_shell`] and has resolved the target user's
+    /// login shell.
     pub fn shell(&self, command_line: impl Into<String>) -> Command {
         Command::new(self.clone(), tues_core::Command::shell(command_line))
     }

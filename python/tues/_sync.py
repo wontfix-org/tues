@@ -122,6 +122,7 @@ class Popen:
         stdout: _StdioArg = None,
         stderr: _StdioArg = None,
         shell: bool = False,
+        executable: Optional[str] = None,
         cwd: Union[str, bytes, "os.PathLike[Any]", None] = None,
         env: Optional[Mapping[str, Optional[str]]] = None,
         universal_newlines: Optional[bool] = None,
@@ -179,6 +180,7 @@ class Popen:
             env=_common.normalize_env(env),
             user=user,
             pty=pty,
+            executable=executable,
         )
 
         raw_in, raw_out, raw_err = self._child.stdin, self._child.stdout, self._child.stderr
@@ -438,7 +440,9 @@ class Session:
         an ssh_config alias).
 
         Options: ``login_user``, ``port``, ``user`` (default user commands
-        run as, via sudo), ``host_name``, ``identity_files``, ``identities_only``,
+        run as, via sudo), ``user_shell`` (read that user's login shell once
+        and run shell commands with it; the default is ``sh``), ``host_name``,
+        ``identity_files``, ``identities_only``,
         ``proxy_jump``, ``connect_timeout``, ``server_alive_interval``,
         ``compression``, ``use_agent``, ``pubkey_authentication``,
         ``password_authentication``, ``host_key_policy`` (``"strict"`` |
