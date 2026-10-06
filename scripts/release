@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [--dry-run] [--rc] [--upload]
+Usage: scripts/release [--dry-run] [--rc]
                        [--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
@@ -11,9 +11,8 @@ to dist/<version>/. It does not push the tag. dist/latest points at the
 version just built. dist/stable points at the newest tagged final release
 and is left alone for a --rc build.
 
---upload publishes the built artifacts with ``uv publish`` (using uv's
-configured index and credentials). Without it, the script prints the
-upload command instead.
+Unless --dry-run is set, the built artifacts are published with
+``uv publish`` (using uv's configured index and credentials).
 
 --rc builds a release candidate of VERSION. A plain VERSION such as 0.3.0
 selects the next free candidate (0.3.0rc1, then 0.3.0rc2, from the local
@@ -77,12 +76,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
         usage=(
-            "scripts/release [--dry-run] [--rc] [--upload] "
+            "scripts/release [--dry-run] [--rc] "
             "[--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="print the plan and stop")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan and stop (skips commit, tag, build, and upload)",
+    )
     parser.add_argument(
         "--rc",
         action="store_true",
@@ -90,11 +93,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "commit and tag the next release candidate of VERSION "
             "(0.3.0 -> 0.3.0-rc.1, published as 0.3.0rc1)"
         ),
-    )
-    parser.add_argument(
-        "--upload",
-        action="store_true",
-        help="upload built artifacts with uv publish",
     )
     parser.add_argument(
         "--python",
@@ -357,12 +355,6 @@ def upload_artifacts(directory: Path) -> None:
     run(["uv", "publish", *(str(path) for path in artifacts)])
 
 
-def print_upload_hint(link_name: str) -> None:
-    print("Upload the artifacts with:")
-    print(f"  uv publish dist/{link_name}/*")
-    print("or pass --upload.")
-
-
 def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
 
@@ -404,7 +396,6 @@ def main(argv: Sequence[str]) -> int:
         f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
         f"in {IMAGE} and write them to dist/{public}/"
     )
-    upload_target = "rc" if candidate else "stable"
 
     need_commit = False
     need_tag = False
@@ -435,8 +426,7 @@ def main(argv: Sequence[str]) -> int:
             )
         else:
             print(f"would point dist/latest and dist/stable at {public}")
-        if args.upload:
-            print(f"would upload dist/{public}/* with uv publish")
+        print(f"would upload dist/{public}/* with uv publish")
         return 0
 
     if need_commit:
@@ -475,10 +465,7 @@ def main(argv: Sequence[str]) -> int:
             f"the version is requested (tues=={public}) or --pre is given."
         )
         print()
-    if args.upload:
-        upload_artifacts(out)
-    else:
-        print_upload_hint(upload_target)
+    upload_artifacts(out)
     return 0
 
 

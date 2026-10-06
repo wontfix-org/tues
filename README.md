@@ -639,12 +639,11 @@ wheel per CPython into `dist/<version>/` for an internal index. Each wheel
 carries the extension module and the `tues` console script. Older version
 directories are left in place. `dist/latest` points at the version just
 built, and `dist/stable` points at the newest tagged final release. The tag
-is not pushed. Pass `--upload` to publish the artifacts with `uv publish`
-(uv's configured index and credentials); otherwise the script prints the
-upload command.
+is not pushed. Unless `--dry-run` is set, the artifacts are published with
+`uv publish` (uv's configured index and credentials).
 
 ```sh
-just release 0.2.0 --upload
+just release 0.2.0
 git push origin HEAD v0.2.0
 ```
 
@@ -654,7 +653,6 @@ passed through:
 ```sh
 just release 0.2.0 --dry-run
 just release 0.2.0 --python 3.12
-just release 0.2.0 --upload
 ```
 
 By default that is Python 3.9, 3.10, 3.11, 3.12, 3.13 and 3.14. The build runs in the
@@ -672,7 +670,7 @@ candidate itself:
 just rc 0.3.0
 # Cargo.toml 0.3.0-rc.1, wheels named 0.3.0rc1
 just rc 0.3.0rc2 --dry-run
-just rc 0.3.0 --upload
+just rc 0.3.0
 ```
 
 Cargo stores `X.Y.Z-rc.N`. That is SemVer, and PEP 440 normalizes it to
