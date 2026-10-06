@@ -277,6 +277,10 @@ struct Cli {
     )]
     quiet: bool,
 
+    /// Print detailed error information (anyhow debug format).
+    #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_DEBUG")]
+    debug: bool,
+
     /// Print the resolved hosts on stderr, then run the command.
     #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_SHOW_HOSTS")]
     show_hosts: bool,
@@ -461,6 +465,7 @@ where
             return e.exit_code();
         }
     };
+    let debug = cli.debug;
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -474,7 +479,11 @@ where
     let code = match runtime.block_on(run_cli(cli)) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("Error: {e:?}");
+            if debug {
+                eprintln!("Error: {e:?}");
+            } else {
+                eprintln!("Error: {e:#}");
+            }
             1
         }
     };
@@ -485,7 +494,9 @@ where
 }
 
 async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
+    let debug = cli.debug;
     let level = match cli.verbose_level() {
+        0 if debug => "debug",
         0 => "warn",
         1 => "info",
         2 => "debug",

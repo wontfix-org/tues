@@ -73,6 +73,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --sort-hosts           Sort hosts alphabetically before running
   -v, --verbose...           Verbose logging
   -q, --quiet                Suppress verbose status lines
+      --debug                Print detailed error information
 ```
 
 Most options also read a matching `TUES_*` environment variable (for example
