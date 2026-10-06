@@ -885,7 +885,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
             None,
         ));
     };
-    let resolved = resolve_script(spec, &cli.script_path)?;
+    let resolved = resolve_script(spec, &cli.script_path, cli.files.len())?;
     let (user, pty, prefix, prefix_format) = effective_settings(cli, &resolved.defaults);
     let defaults = resolved.defaults;
     Ok((
@@ -934,7 +934,11 @@ struct ResolvedScript {
     defaults: ScriptDefaults,
 }
 
-fn resolve_script(spec: &str, script_path: &[PathBuf]) -> anyhow::Result<ResolvedScript> {
+fn resolve_script(
+    spec: &str,
+    script_path: &[PathBuf],
+    prior_uploads: usize,
+) -> anyhow::Result<ResolvedScript> {
     let (name, args) = split_script_spec(spec)?;
     let path = lookup_script(&name, script_path)?;
     let remote_name = path
@@ -946,7 +950,8 @@ fn resolve_script(spec: &str, script_path: &[PathBuf]) -> anyhow::Result<Resolve
         anyhow::bail!("{name}: cannot derive a file name");
     }
     let defaults = load_script_defaults(&path)?;
-    let command = script_command(&remote_name, &args);
+    // --file uploads come first; the script is the next `$TUES_FILE*`.
+    let command = script_command(&remote_name, &args, prior_uploads + 1);
     Ok(ResolvedScript {
         file: FileSpec {
             src: path,
@@ -958,15 +963,14 @@ fn resolve_script(spec: &str, script_path: &[PathBuf]) -> anyhow::Result<Resolve
     })
 }
 
-/// `chmod` so `./name` can run, then the script and the arguments from `SPEC`.
-fn script_command(name: &str, args: &[String]) -> String {
+/// `chmod` via `$TUES_FILE{index}` so the script matches other `-f` uploads, then run it.
+fn script_command(name: &str, args: &[String], tues_file_index: usize) -> String {
     let path = format!("./{name}");
     let mut words = Vec::with_capacity(args.len() + 1);
-    words.push(path.clone());
+    words.push(path);
     words.extend(args.iter().cloned());
     format!(
-        "chmod u+x {} && {}",
-        tues_core::shell::quote(&path),
+        "chmod u+x \"$TUES_FILE{tues_file_index}\" && {}",
         tues_core::shell::join(words)
     )
 }
@@ -1917,12 +1921,20 @@ mod tests {
         let empty: &[std::path::PathBuf] = &[];
         assert_eq!(super::lookup_script(spec, empty).unwrap(), script);
 
-        let resolved = super::resolve_script(&format!("{spec} arg"), empty).unwrap();
+        let resolved = super::resolve_script(&format!("{spec} arg"), empty, 0).unwrap();
         assert_eq!(resolved.file.src, script);
         assert_eq!(resolved.file.name, "tool");
         assert!(resolved.file.is_temporary());
-        assert_eq!(resolved.command, "chmod u+x ./tool && ./tool arg");
+        assert_eq!(
+            resolved.command,
+            "chmod u+x \"$TUES_FILE1\" && ./tool arg"
+        );
         assert_eq!(resolved.defaults, super::ScriptDefaults::default());
+        let resolved = super::resolve_script(&format!("{spec} arg"), empty, 2).unwrap();
+        assert_eq!(
+            resolved.command,
+            "chmod u+x \"$TUES_FILE3\" && ./tool arg"
+        );
 
         let missing = dir.join("missing");
         let err = super::lookup_script(missing.to_str().unwrap(), empty).unwrap_err();
@@ -2273,12 +2285,12 @@ echo hi
     #[test]
     fn script_command_runs_the_uploaded_name() {
         assert_eq!(
-            super::script_command("my-script", &["--my-option".into(), "arg".into()]),
-            "chmod u+x ./my-script && ./my-script --my-option arg"
+            super::script_command("my-script", &["--my-option".into(), "arg".into()], 1),
+            "chmod u+x \"$TUES_FILE1\" && ./my-script --my-option arg"
         );
         assert_eq!(
-            super::script_command("my-script", &["a b".into()]),
-            "chmod u+x ./my-script && ./my-script 'a b'"
+            super::script_command("my-script", &["a b".into()], 2),
+            "chmod u+x \"$TUES_FILE2\" && ./my-script 'a b'"
         );
     }
 

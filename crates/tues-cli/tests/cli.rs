@@ -544,6 +544,7 @@ fn sudo_runs_without_a_pty_unless_requested() {
 
     let out = tues()
         .arg("--pty")
+        .arg("--universal-newlines")
         .arg("-u")
         .arg("root")
         .arg("id -un")
@@ -1014,7 +1015,7 @@ fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\r\n"));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{USER}\n"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
