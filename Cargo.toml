@@ -27,7 +27,7 @@ tues-testsupport = { path = "crates/tues-testsupport" }
 
 anyhow = "1"
 bytes = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 dirs = "7"
 futures = "0.3"
 pyo3 = "0.29"

@@ -48,8 +48,9 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
   -l, --login-user <USER>    Login user
   -u, --user <USER>          User to run the command as, via sudo
   -n, --num-jobs <N>         Hosts worked on concurrently (default: 1)
+                             (`--pool-size` / `TUES_POOL_SIZE` also accepted)
   -p, --parallel             Up to 20 hosts at once, unless `-n` is set
-      --check                Stop after the first failure (one job only)
+  -c, --check                Stop after the first failure (one job only)
       --no-check             Keep going after a failure (default)
       --port <PORT>          SSH port
   -i, --identity <FILE>      Identity file; may be repeated
@@ -62,13 +63,16 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --known-hosts <FILE>   known_hosts file
       --connect-timeout <S>  Connection timeout in seconds
   -P, --prefix               Prefix output lines even on a single host
-      --no-prefix            Do not prefix output lines
+  -N, --no-prefix            Do not prefix output lines
       --prefix-format <FMT>  Line prefix template (default: [<name>/<stream>]: )
   -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
       --show-hosts           Print the hosts on stderr, then run the command
       --sort-hosts           Sort hosts alphabetically before running
   -v, --verbose...           Verbose logging
 ```
+
+Most options also read a matching `TUES_*` environment variable (for example
+`TUES_USER`, `TUES_LOGIN_USER`, `TUES_POOL_SIZE`, `TUES_PREFIX`).
 
 The provider, the positional after the command or `--script`, supplies the hosts. A `--script` file can name it in its header instead, and a provider on the command line overrides that. `cl` takes them as
 the remaining arguments. `file` reads them from files, one host per line, and

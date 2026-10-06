@@ -80,79 +80,127 @@ When TUES_PW is set, tues uses it for login and sudo passwords instead of prompt
 )]
 struct Cli {
     /// Login user (default: from ssh_config or the local user).
-    #[arg(short = 'l', long = "login-user")]
+    #[arg(short = 'l', long = "login-user", env = "TUES_LOGIN_USER")]
     login_user: Option<String>,
 
     /// User to run the command as, via sudo.
-    #[arg(short = 'u', long)]
+    #[arg(short = 'u', long, env = "TUES_USER")]
     user: Option<String>,
 
     /// Hosts worked on concurrently (default: 1, or 20 with `-p`).
-    #[arg(short = 'n', long = "num-jobs", value_name = "N")]
+    ///
+    /// `--pool-size` and `TUES_POOL_SIZE` are accepted for compatibility with
+    /// older tues releases.
+    #[arg(
+        short = 'n',
+        long = "num-jobs",
+        visible_alias = "pool-size",
+        env = "TUES_POOL_SIZE",
+        value_name = "N"
+    )]
     num_jobs: Option<usize>,
 
     /// Work on up to 20 hosts at once. Has no effect when `-n` is set.
-    #[arg(short = 'p', long, action = clap::ArgAction::SetTrue)]
+    #[arg(short = 'p', long, action = clap::ArgAction::SetTrue, env = "TUES_PARALLEL")]
     parallel: bool,
 
     /// Stop after the first host that fails or exits non-zero.
     /// Only valid with one job at a time.
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_check")]
+    #[arg(
+        short = 'c',
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "no_check",
+        env = "TUES_CHECK"
+    )]
     check: bool,
 
     /// Keep going after a host fails or exits non-zero (the default).
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "check")]
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "check",
+        env = "TUES_NO_CHECK"
+    )]
     no_check: bool,
 
     /// SSH port.
-    #[arg(long)]
+    #[arg(long, env = "TUES_PORT")]
     port: Option<u16>,
 
     /// Identity (private key) file; may be repeated.
-    #[arg(short = 'i', long = "identity")]
+    #[arg(short = 'i', long = "identity", env = "TUES_IDENTITY")]
     identity: Vec<PathBuf>,
 
     /// Read this ssh_config instead of ~/.ssh/config.
-    #[arg(short = 'F', long = "config")]
+    #[arg(short = 'F', long = "config", env = "TUES_CONFIG")]
     config: Option<PathBuf>,
 
     /// Do not read any ssh_config.
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_NO_SSH_CONFIG")]
     no_ssh_config: bool,
 
     /// Upload a file or directory (recursively) before running the command;
     /// may be repeated. `SRC` goes into the remote working directory and is
     /// removed afterwards. `SRC:DST` is uploaded to `DST` and kept. Write a
     /// literal `:` as `\:` and a literal `\` as `\\`.
-    #[arg(short = 'f', long = "file", value_name = "SRC[:DST]", value_parser = FileSpec::parse)]
+    #[arg(
+        short = 'f',
+        long = "file",
+        env = "TUES_FILE",
+        value_name = "SRC[:DST]",
+        value_parser = FileSpec::parse
+    )]
     files: Vec<FileSpec>,
 
     /// Request a pseudo-terminal.
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "no_pty")]
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "no_pty",
+        env = "TUES_PTY"
+    )]
     pty: bool,
 
     /// Do not request a pseudo-terminal.
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "pty")]
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "pty",
+        env = "TUES_NO_PTY"
+    )]
     no_pty: bool,
 
     /// Host key verification policy (default: ssh_config, else strict).
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, env = "TUES_HOST_KEY_CHECK")]
     host_key_check: Option<HostKeyCheck>,
 
     /// known_hosts file.
-    #[arg(long)]
+    #[arg(long, env = "TUES_KNOWN_HOSTS")]
     known_hosts: Option<PathBuf>,
 
     /// Connection timeout in seconds.
-    #[arg(long, value_name = "SECS")]
+    #[arg(long, value_name = "SECS", env = "TUES_CONNECT_TIMEOUT")]
     connect_timeout: Option<u64>,
 
     /// Prefix output lines even when running on a single host.
-    #[arg(short = 'P', long, action = clap::ArgAction::SetTrue, overrides_with = "no_prefix")]
+    #[arg(
+        short = 'P',
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "no_prefix",
+        env = "TUES_PREFIX"
+    )]
     prefix: bool,
 
     /// Do not prefix output lines, even when running on several hosts.
-    #[arg(long, action = clap::ArgAction::SetTrue, overrides_with = "prefix")]
+    #[arg(
+        short = 'N',
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "prefix",
+        env = "TUES_NO_PREFIX"
+    )]
     no_prefix: bool,
 
     /// Format for per-host output line prefixes.
@@ -160,7 +208,7 @@ struct Cli {
     /// Placeholders: `<name>` (provider host string), `<server-ip>`,
     /// `<client-port>`, `<server-port>`, and `<stream>` (`stdout`, `stderr`,
     /// or `pty`). Default: `[<name>/<stream>]: `.
-    #[arg(long, value_name = "FORMAT")]
+    #[arg(long, value_name = "FORMAT", env = "TUES_PREFIX_FORMAT")]
     prefix_format: Option<String>,
 
     /// Run a script from `TUES_PATH` instead of a remote command.
@@ -176,19 +224,19 @@ struct Cli {
     /// `--prefix-format` override those. `# tues-provider = "cl"` and
     /// `# tues-provider-args = ["web01"]` name the hosts when the command line
     /// does not. A provider after `--script` overrides both lines.
-    #[arg(short = 's', long, value_name = "SPEC")]
+    #[arg(short = 's', long, value_name = "SPEC", env = "TUES_SCRIPT")]
     script: Option<String>,
 
     /// Verbose logging (repeat for more).
-    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    #[arg(short = 'v', long, action = clap::ArgAction::Count, env = "TUES_VERBOSE")]
     verbose: u8,
 
     /// Print the resolved hosts on stderr, then run the command.
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_SHOW_HOSTS")]
     show_hosts: bool,
 
     /// Sort hosts alphabetically before running the command.
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_SORT_HOSTS")]
     sort_hosts: bool,
 
     /// Remote shell command, then a provider, then that provider's arguments.
@@ -1545,8 +1593,22 @@ mod tests {
             .unwrap();
         assert_eq!(cli.job_count(), 3);
 
+        let cli =
+            super::Cli::try_parse_from(["tues", "--pool-size", "7", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.job_count(), 7);
+
         let cli = super::Cli::try_parse_from(["tues", "-n", "0", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.job_count(), 1);
+    }
+
+    #[test]
+    fn legacy_short_aliases_for_check_and_no_prefix() {
+        let cli = super::Cli::try_parse_from(["tues", "-c", "true", "cl", "h"]).unwrap();
+        assert!(cli.fail_fast());
+        let cli = super::Cli::try_parse_from(["tues", "-N", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.prefix_setting(), Some(false));
+        let cli = super::Cli::try_parse_from(["tues", "-N", "-P", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.prefix_setting(), Some(true));
     }
 
     #[test]
