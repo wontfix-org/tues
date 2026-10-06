@@ -11,18 +11,18 @@ members = [
 ]
 
 [workspace.package]
-version = "4.0.3"
+version = "4.0.4"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mvb/tues-rs"
 rust-version = "1.90"
 
 [workspace.dependencies]
-tues-core = { path = "crates/tues-core", version = "4.0.3" }
-tues-async = { path = "crates/tues-async", version = "4.0.3" }
-tues-sync = { path = "crates/tues-sync", version = "4.0.3" }
-tues = { path = "crates/tues", version = "4.0.3" }
-tues-cli = { path = "crates/tues-cli", version = "4.0.3" }
+tues-core = { path = "crates/tues-core", version = "4.0.4" }
+tues-async = { path = "crates/tues-async", version = "4.0.4" }
+tues-sync = { path = "crates/tues-sync", version = "4.0.4" }
+tues = { path = "crates/tues", version = "4.0.4" }
+tues-cli = { path = "crates/tues-cli", version = "4.0.4" }
 tues-testsupport = { path = "crates/tues-testsupport" }
 
 anyhow = "1"
