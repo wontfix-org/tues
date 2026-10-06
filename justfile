@@ -73,10 +73,10 @@ test:
     .venv/bin/python -m coverage combine --quiet
     .venv/bin/python -m coverage report --include='*/python/tues/*'
 
-# Tag and build the next release candidate of VERSION (0.3.0 -> 0.3.0rc1). Extra arguments are passed to scripts/release.
-rc version *args:
-    "{{justfile_directory()}}/scripts/release" --rc "{{version}}" {{args}}
+# Tag and build the next release candidate (omit version to be prompted).
+rc *args:
+    "{{justfile_directory()}}/scripts/release" --rc {{args}}
 
-# Tag and build VERSION. Extra arguments are passed to scripts/release.
-release version *args:
-    "{{justfile_directory()}}/scripts/release" "{{version}}" {{args}}
+# Tag and build a release (omit version to be prompted with recent commits).
+release *args:
+    "{{justfile_directory()}}/scripts/release" {{args}}

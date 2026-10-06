@@ -647,10 +647,12 @@ just release 0.2.0
 git push origin HEAD v0.2.0
 ```
 
-`just release` calls `scripts/release` with the version. Further arguments are
-passed through:
+`just release` calls `scripts/release`. When the version is omitted on a TTY,
+the script prints commit summaries since the last release and prompts for
+one. Further arguments are passed through:
 
 ```sh
+just release
 just release 0.2.0 --dry-run
 just release 0.2.0 --python 3.12
 ```
@@ -670,7 +672,7 @@ candidate itself:
 just rc 0.3.0
 # Cargo.toml 0.3.0-rc.1, wheels named 0.3.0rc1
 just rc 0.3.0rc2 --dry-run
-just rc 0.3.0
+just rc
 ```
 
 Cargo stores `X.Y.Z-rc.N`. That is SemVer, and PEP 440 normalizes it to
