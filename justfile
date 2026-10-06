@@ -14,10 +14,41 @@ setup:
     uv venv
     uv pip install --group dev
     .venv/bin/maturin develop --release
-    rustup component add llvm-tools-preview
+    rustup component add llvm-tools-preview rustfmt
     if ! cargo llvm-cov --version >/dev/null 2>&1; then
         cargo install cargo-llvm-cov --locked
     fi
+
+# Format all Rust crates.
+fmt:
+    cd "{{justfile_directory()}}" && cargo fmt --all
+
+# Clippy the workspace (all targets).
+check:
+    cd "{{justfile_directory()}}" && cargo clippy --workspace --all-targets
+
+# Rust workspace tests (includes the pytest suite via tues-python).
+test-rust:
+    cd "{{justfile_directory()}}" && cargo test --workspace
+
+# Python tests only (expects just setup).
+test-py:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    if [[ ! -x .venv/bin/python ]]; then
+        echo "create .venv first (just setup)" >&2
+        exit 1
+    fi
+    .venv/bin/python -m pytest
+
+# One Rust crate: just test-crate tues-core
+test-crate crate *args:
+    cd "{{justfile_directory()}}" && cargo test -p {{crate}} {{args}}
+
+# HTML coverage report at target/llvm-cov/html.
+coverage:
+    cd "{{justfile_directory()}}" && cargo coverage
 
 # Run the Rust and Python tests, then print per-file coverage.
 test:
