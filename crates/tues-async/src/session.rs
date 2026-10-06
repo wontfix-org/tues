@@ -323,8 +323,14 @@ impl Session {
             .map_err(map_channel_error)?;
         apply_set_env(&channel, &opts.set_env).await?;
         if let Some(pty) = &plan.pty {
+            let modes = if pty.universal_newlines {
+                Vec::new()
+            } else {
+                // Match legacy asyncssh: leave `\n` alone instead of mapping to `\r\n`.
+                vec![(russh::Pty::INLCR, 0), (russh::Pty::ONLCR, 0)]
+            };
             channel
-                .request_pty(true, &pty.term, pty.cols, pty.rows, 0, 0, &[])
+                .request_pty(true, &pty.term, pty.cols, pty.rows, 0, 0, &modes)
                 .await
                 .map_err(map_channel_error)?;
         }

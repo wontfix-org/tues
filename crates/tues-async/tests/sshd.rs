@@ -769,6 +769,7 @@ async fn command_builder_reaches_the_remote_shell() {
             term: "dumb".into(),
             cols: 20,
             rows: 5,
+            universal_newlines: true,
         })
         .user("root")
         .as_login_user();

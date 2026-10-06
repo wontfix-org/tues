@@ -171,6 +171,25 @@ struct Cli {
     )]
     no_pty: bool,
 
+    /// With a PTY, leave the remote TTY's default `\n` → `\r\n` translation.
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "no_universal_newlines",
+        env = "TUES_UNIVERSAL_NEWLINES"
+    )]
+    universal_newlines: bool,
+
+    /// With a PTY, disable `INLCR`/`ONLCR` so `\n` is not translated to `\r\n`
+    /// (the default).
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "universal_newlines",
+        env = "TUES_NO_UNIVERSAL_NEWLINES"
+    )]
+    no_universal_newlines: bool,
+
     /// Host key verification policy (default: ssh_config, else strict).
     #[arg(long, value_enum, env = "TUES_HOST_KEY_CHECK")]
     host_key_check: Option<HostKeyCheck>,
@@ -310,6 +329,8 @@ struct Run {
     script: Option<FileSpec>,
     user: Option<String>,
     pty: bool,
+    /// When a PTY is used, whether the remote may translate `\n` to `\r\n`.
+    universal_newlines: bool,
     /// `None` means prefix only when more than one host is selected.
     prefix: Option<bool>,
     /// Template for each output line prefix; see [`DEFAULT_PREFIX_FORMAT`].
@@ -566,6 +587,11 @@ impl Cli {
         self.pty && !self.no_pty
     }
 
+    /// `--universal-newlines` wins when given last; otherwise `\n` stays `\n`.
+    fn use_universal_newlines(&self) -> bool {
+        self.universal_newlines && !self.no_universal_newlines
+    }
+
     /// Explicit `--prefix` / `--no-prefix`, or `None` to follow host count / script defaults.
     fn prefix_setting(&self) -> Option<bool> {
         if self.prefix {
@@ -806,6 +832,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
                 script: None,
                 user: cli.user.clone(),
                 pty: cli.use_pty(),
+                universal_newlines: cli.use_universal_newlines(),
                 prefix: cli.prefix_setting(),
                 prefix_format: effective_prefix_format(cli, None),
             },
@@ -821,6 +848,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
             script: Some(resolved.file),
             user,
             pty,
+            universal_newlines: cli.use_universal_newlines(),
             prefix,
             prefix_format,
         },
@@ -1209,6 +1237,7 @@ async fn run_host(
             run_command(
                 &run.command,
                 run.pty,
+                run.universal_newlines,
                 &session,
                 server,
                 prefix,
@@ -1259,6 +1288,7 @@ async fn upload_files(
 async fn run_command(
     command: &str,
     pty: bool,
+    universal_newlines: bool,
     session: &Session,
     server: &str,
     prefix: bool,
@@ -1266,7 +1296,13 @@ async fn run_command(
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
-    let mut cmd = session.shell(command).pty(pty).stdin(Stdio::Null);
+    let mut cmd = session.shell(command).stdin(Stdio::Null);
+    if pty {
+        cmd = cmd.pty_config(tues_core::PtyConfig {
+            universal_newlines,
+            ..tues_core::PtyConfig::default()
+        });
+    }
 
     if prefix {
         cmd = cmd.stdout(Stdio::Piped).stderr(Stdio::Piped);
@@ -1609,6 +1645,32 @@ mod tests {
         assert_eq!(cli.prefix_setting(), Some(false));
         let cli = super::Cli::try_parse_from(["tues", "-N", "-P", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.prefix_setting(), Some(true));
+    }
+
+    #[test]
+    fn universal_newlines_defaults_off_and_overrides() {
+        let plain = super::Cli::try_parse_from(["tues", "--pty", "true", "cl", "h"]).unwrap();
+        assert!(!plain.use_universal_newlines());
+        let on = super::Cli::try_parse_from([
+            "tues",
+            "--pty",
+            "--universal-newlines",
+            "true",
+            "cl",
+            "h",
+        ])
+        .unwrap();
+        assert!(on.use_universal_newlines());
+        let off = super::Cli::try_parse_from([
+            "tues",
+            "--universal-newlines",
+            "--no-universal-newlines",
+            "true",
+            "cl",
+            "h",
+        ])
+        .unwrap();
+        assert!(!off.use_universal_newlines());
     }
 
     #[test]

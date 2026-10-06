@@ -59,6 +59,8 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --file <SRC[:DST]>     Upload a file or directory first; may be repeated
       --pty                  Request a pseudo-terminal
       --no-pty               Do not request a pseudo-terminal
+      --universal-newlines   With a PTY, keep remote `\n` → `\r\n` translation
+      --no-universal-newlines  With a PTY, leave `\n` untranslated (default)
       --host-key-check <P>   strict | accept-new | off
       --known-hosts <FILE>   known_hosts file
       --connect-timeout <S>  Connection timeout in seconds

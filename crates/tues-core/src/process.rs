@@ -39,6 +39,10 @@ pub struct PtyConfig {
     pub term: String,
     pub cols: u32,
     pub rows: u32,
+    /// When `true`, leave the remote TTY's default newline translation alone
+    /// (typically `\n` → `\r\n`). When `false`, ask the server to disable
+    /// `INLCR`/`ONLCR` so `\n` stays `\n`.
+    pub universal_newlines: bool,
 }
 
 impl Default for PtyConfig {
@@ -47,6 +51,7 @@ impl Default for PtyConfig {
             term: std::env::var("TERM").unwrap_or_else(|_| "xterm".to_string()),
             cols: 80,
             rows: 24,
+            universal_newlines: true,
         }
     }
 }
