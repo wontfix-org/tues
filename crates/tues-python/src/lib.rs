@@ -21,10 +21,20 @@ fn cli_main(py: Python<'_>, argv: Vec<std::ffi::OsString>) -> i32 {
     py.detach(move || tues_cli::run(argv))
 }
 
+/// Bytes the low-level prompt writes after the password has been read.
+///
+/// The legacy interface applies this to its own terminal prompt so both
+/// paths share [`tues_core::PasswordPromptFinish`].
+#[pyfunction]
+fn password_prompt_finish_bytes(finish: common::PasswordPromptFinish) -> &'static [u8] {
+    tues_core::PasswordPromptFinish::from(finish).terminal_sequence()
+}
+
 #[pymodule]
 fn _tues(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(cli_main, m)?)?;
+    m.add_function(wrap_pyfunction!(password_prompt_finish_bytes, m)?)?;
 
     m.add("PIPE", common::PIPE)?;
     m.add("STDOUT", common::STDOUT)?;
@@ -42,6 +52,7 @@ fn _tues(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<common::Metadata>()?;
     m.add_class::<common::DirEntry>()?;
     m.add_class::<common::PasswordRequest>()?;
+    m.add_class::<common::PasswordPromptFinish>()?;
 
     m.add_class::<sync::Session>()?;
     m.add_class::<sync::Child>()?;

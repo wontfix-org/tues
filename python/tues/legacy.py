@@ -52,7 +52,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
 from ._common import DEVNULL, PIPE, STDOUT
 from ._sync import Session
-from ._tues import SudoError, TuesError
+from ._tues import PasswordPromptFinish, SudoError, TuesError, password_prompt_finish_bytes
 
 __all__ = [
     "DIR_ABORT",
@@ -68,6 +68,7 @@ __all__ = [
     "TuesUserAbort",
     "TuesTaskError",
     "PasswordManager",
+    "PasswordPromptFinish",
     "Host",
     "Task",
     "Script",
@@ -265,7 +266,12 @@ def _ask_getpass(message: str) -> Optional[str]:
         return None
 
 
-def _ask_tty(message: str) -> Optional[str]:
+def _finish_prompt(fd: int, finish: PasswordPromptFinish) -> None:
+    """Apply ``finish`` on ``fd``. The bytes come from the low-level prompt."""
+    _write_all(fd, password_prompt_finish_bytes(finish))
+
+
+def _ask_tty(message: str, finish: PasswordPromptFinish = PasswordPromptFinish.Newline) -> Optional[str]:
     if termios is None:
         return _ask_getpass(message)
     try:
@@ -279,9 +285,10 @@ def _ask_tty(message: str) -> Optional[str]:
         return _ask_getpass(message)
 
     # Canonical mode stays on (ISIG too) so Ctrl+C is a signal, not a raw
-    # byte, and the line discipline still edits the password.
+    # byte, and the line discipline still edits the password. ECHONL is
+    # cleared so Enter does not move the cursor; ``finish`` does that.
     hidden = attrs[:]
-    hidden[3] = attrs[3] & ~termios.ECHO
+    hidden[3] = attrs[3] & ~termios.ECHO & ~termios.ECHONL
     global _tty_snapshot
     # A Ctrl+C that lands as the previous prompt finishes can leave a wake
     # byte behind. Drop it before this prompt starts waiting.
@@ -290,7 +297,10 @@ def _ask_tty(message: str) -> Optional[str]:
     try:
         termios.tcsetattr(fd, termios.TCSANOW, hidden)
         _write_all(fd, message.encode(_tty_encoding(fd), "replace"))
-        return _read_hidden_line(fd)
+        line = _read_hidden_line(fd)
+        if line is not None:
+            _finish_prompt(fd, finish)
+        return line
     except (EOFError, KeyboardInterrupt):
         return None
     finally:
@@ -323,20 +333,31 @@ class PasswordManager:
     ``prompt`` replaces the default question. It receives the prompt string
     and returns the password, or ``None`` to abort. The default reads from
     ``/dev/tty`` with echo turned off and restores the previous terminal mode
-    if the prompt is interrupted.
+    if the prompt is interrupted. ``prompt_finish`` says what that default
+    does with the cursor afterwards: :attr:`PasswordPromptFinish.Newline`
+    (the legacy behaviour, so the next write starts on the following line),
+    :attr:`PasswordPromptFinish.CurrentLine` (leave the cursor where it is),
+    or :attr:`PasswordPromptFinish.Erase` (remove the prompt so later output
+    is not prefixed by it). A custom ``prompt`` ignores ``prompt_finish``.
     """
 
-    def __init__(self, prompt: Optional[Callable[[str], Optional[str]]] = None, password: Optional[str] = None):
+    def __init__(
+        self,
+        prompt: Optional[Callable[[str], Optional[str]]] = None,
+        password: Optional[str] = None,
+        *,
+        prompt_finish: PasswordPromptFinish = PasswordPromptFinish.Newline,
+    ):
         self._lock = threading.Lock()
+        self._prompt_finish = prompt_finish
         if prompt is not None:
             self._prompt = prompt
         self._password = password if password else os.environ.get("TUES_PW")
         self._have = self._password is not None
 
-    @staticmethod
-    def _prompt(message: str) -> Optional[str]:
+    def _prompt(self, message: str) -> Optional[str]:
         with _prompt_gate:
-            return _ask_tty(message)
+            return _ask_tty(message, self._prompt_finish)
 
     def get(self, message: Any = None) -> Optional[str]:
         """Return the cached password, prompting when ``message`` is given.

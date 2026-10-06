@@ -317,7 +317,7 @@ struct FleetPrompter;
 
 impl PasswordPrompter for FleetPrompter {
     fn prompt(&mut self, req: &PasswordRequest) -> tues_core::Result<SecretString> {
-        let mut inner = TtyPrompter;
+        let mut inner = TtyPrompter::new();
         let generic = PasswordRequest {
             host: "all hosts".to_string(),
             ..req.clone()
@@ -1521,8 +1521,8 @@ mod tests {
         let cli = super::Cli::try_parse_from(["tues", "-n", "4", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.job_count(), 4);
 
-        let cli =
-            super::Cli::try_parse_from(["tues", "-p", "--num-jobs", "3", "true", "cl", "h"]).unwrap();
+        let cli = super::Cli::try_parse_from(["tues", "-p", "--num-jobs", "3", "true", "cl", "h"])
+            .unwrap();
         assert_eq!(cli.job_count(), 3);
 
         let cli = super::Cli::try_parse_from(["tues", "-n", "0", "true", "cl", "h"]).unwrap();
@@ -1696,22 +1696,15 @@ mod tests {
         assert!(err("{\"user\": \"\"}").contains("user must not be empty"));
         assert!(err("{\"pty\": \"yes\"}").contains("pty must be a boolean"));
         assert!(err("{\"prefix\": 0}").contains("prefix must be a boolean"));
-        assert!(
-            err("{\"prefix-format\": true}").contains("prefix-format must be a string")
-        );
+        assert!(err("{\"prefix-format\": true}").contains("prefix-format must be a string"));
         assert!(err("{\"nope\": true}").contains("unknown tues-args key: nope"));
         assert_eq!(
             super::parse_tues_args("{}").unwrap(),
             super::ScriptDefaults::default()
         );
-        let parsed = super::parse_tues_args(
-            "{\"prefix-format\": \"[<name>/<stream>]: \"}",
-        )
-        .unwrap();
-        assert_eq!(
-            parsed.prefix_format.as_deref(),
-            Some("[<name>/<stream>]: ")
-        );
+        let parsed =
+            super::parse_tues_args("{\"prefix-format\": \"[<name>/<stream>]: \"}").unwrap();
+        assert_eq!(parsed.prefix_format.as_deref(), Some("[<name>/<stream>]: "));
     }
 
     #[test]
@@ -2021,7 +2014,8 @@ echo hi
             prefix: Some(false),
             ..Default::default()
         };
-        let cli = super::Cli::try_parse_from(["tues", "--prefix", "-s", "tool", "cl", "h"]).unwrap();
+        let cli =
+            super::Cli::try_parse_from(["tues", "--prefix", "-s", "tool", "cl", "h"]).unwrap();
         let (user, pty, prefix, prefix_format) = super::effective_settings(&cli, &defaults_off);
         assert_eq!(user, None);
         assert!(!pty);

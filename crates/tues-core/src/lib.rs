@@ -39,3 +39,4 @@ pub use process::{
 };
 pub use secrecy::{ExposeSecret, SecretString};
 pub use ssh_config::{HostParams, SshConfig};
+pub use tty_prompt::PasswordPromptFinish;

@@ -27,6 +27,20 @@ class HostKeyError(TuesError): ...
 class SudoError(TuesError): ...
 class SftpError(TuesError): ...
 
+class PasswordPromptFinish:
+    """What the terminal shows after a hidden password has been read.
+
+    Echo is off while the password is typed, so Enter does not move the
+    cursor. ``Newline`` is what the legacy password prompt did.
+    """
+
+    Newline: PasswordPromptFinish
+    CurrentLine: PasswordPromptFinish
+    Erase: PasswordPromptFinish
+
+def password_prompt_finish_bytes(finish: PasswordPromptFinish) -> bytes:
+    """Bytes the low-level prompt writes after the password has been read."""
+
 class PasswordRequest:
     @property
     def kind(self) -> Literal["login", "sudo", "key_passphrase"]: ...

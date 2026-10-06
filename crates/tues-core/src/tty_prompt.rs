@@ -14,14 +14,61 @@ use crate::error::{Error, Result};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
+/// Where the cursor goes after a hidden password has been read.
+///
+/// Echo is off while the password is typed, and `ECHONL` is cleared, so the
+/// newline from Enter is not displayed. The next write would otherwise
+/// continue on the prompt line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasswordPromptFinish {
+    /// Continue at column 0 of the next line.
+    ///
+    /// This is what the legacy password prompt did, and what `getpass` does:
+    /// later output starts at the beginning of the next line.
+    #[default]
+    Newline,
+    /// Leave the cursor where the prompt ended.
+    CurrentLine,
+    /// Erase the prompt and leave the cursor where it started, so later
+    /// output is not prefixed by the question.
+    Erase,
+}
+
+impl PasswordPromptFinish {
+    /// Bytes written to the terminal once the password has been read.
+    ///
+    /// [`Self::Erase`] is carriage return plus erase-entire-line. The
+    /// password itself was not echoed, so the line holds only the prompt.
+    pub fn terminal_sequence(self) -> &'static [u8] {
+        match self {
+            PasswordPromptFinish::CurrentLine => b"",
+            PasswordPromptFinish::Newline => b"\n",
+            PasswordPromptFinish::Erase => b"\r\x1b[2K",
+        }
+    }
+}
+
+fn write_finish(tty: &mut impl Write, finish: PasswordPromptFinish) -> Result<()> {
+    let sequence = finish.terminal_sequence();
+    if sequence.is_empty() {
+        return Ok(());
+    }
+    tty.write_all(sequence)?;
+    tty.flush()?;
+    Ok(())
+}
+
 #[cfg(not(unix))]
-pub fn read_hidden(prompt: &str) -> Result<String> {
+pub fn read_hidden(prompt: &str, finish: PasswordPromptFinish) -> Result<String> {
+    // `rpassword` always continues on the next line; the other finishes are
+    // implemented for the Unix prompt below.
+    let _ = finish;
     rpassword::prompt_password(prompt)
         .map_err(|e| Error::Password(format!("reading from tty failed: {e}")))
 }
 
 #[cfg(unix)]
-pub fn read_hidden(prompt: &str) -> Result<String> {
+pub fn read_hidden(prompt: &str, finish: PasswordPromptFinish) -> Result<String> {
     // One prompt at a time: the signal handler restores a single saved mode.
     let _gate = PROMPT_LOCK.lock().unwrap_or_else(|err| err.into_inner());
     let mut tty = std::fs::OpenOptions::new()
@@ -32,7 +79,9 @@ pub fn read_hidden(prompt: &str) -> Result<String> {
     let _guard = TermiosGuard::arm(tty.as_raw_fd())?;
     tty.write_all(prompt.as_bytes())?;
     tty.flush()?;
-    read_line(&mut tty)
+    let password = read_line(&mut tty)?;
+    write_finish(&mut tty, finish)?;
+    Ok(password)
 }
 
 #[cfg(unix)]
@@ -82,8 +131,10 @@ mod unix {
             let orig = tcgetattr(fd)?;
             let mut hidden = orig;
             // Leave ICANON and ISIG set. Clearing them is cbreak/raw mode,
-            // and a fatal SIGINT would skip Drop and stick there.
-            hidden.c_lflag &= !libc::ECHO;
+            // and a fatal SIGINT would skip Drop and stick there. Also drop
+            // ECHONL so Enter does not move the cursor; [`PasswordPromptFinish`]
+            // decides that.
+            hidden.c_lflag &= !(libc::ECHO | libc::ECHONL);
             let mut action: libc::sigaction = unsafe { mem::zeroed() };
             action.sa_sigaction = on_sigint as *const () as usize;
             action.sa_flags = 0;
@@ -175,6 +226,7 @@ use unix::{PROMPT_LOCK, TermiosGuard};
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs::File;
+    use std::io::Write;
     use std::os::fd::FromRawFd;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
@@ -243,6 +295,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tty_prompter_finish_places_the_cursor() {
+        let name = "tty_prompt::tests::tty_prompter_finish_places_the_cursor";
+        for finish in ["newline", "current", "erase"] {
+            let outcome = drive_prompt_finish(name, "read", None, Some(finish));
+            let shown = String::from_utf8_lossy(&outcome.output);
+            assert!(
+                outcome.status.success(),
+                "{finish}: status {:?} output {shown}",
+                outcome.status
+            );
+            assert!(
+                outcome.output.windows(5).any(|window| window == b"AFTER"),
+                "{finish}: marker missing in {shown}"
+            );
+            let screen = render_screen(&outcome.output);
+            match finish {
+                "newline" => {
+                    let prompt_row = screen
+                        .iter()
+                        .position(|row| row.contains("password:"))
+                        .unwrap_or_else(|| panic!("{finish}: {screen:?}"));
+                    let after_row = screen
+                        .iter()
+                        .position(|row| row.contains("AFTER"))
+                        .unwrap_or_else(|| panic!("{finish}: {screen:?}"));
+                    assert_eq!(after_row, prompt_row + 1, "{screen:?}");
+                    assert!(screen[after_row].starts_with("AFTER"), "{screen:?}");
+                }
+                "current" => assert!(
+                    outcome
+                        .output
+                        .windows(15)
+                        .any(|window| window == b"password: AFTER"),
+                    "{shown}"
+                ),
+                "erase" => {
+                    let flat = screen.join("\n");
+                    assert!(!flat.contains("password"), "{screen:?}");
+                    assert!(flat.contains("AFTER"), "{screen:?}");
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn render_screen(data: &[u8]) -> Vec<String> {
+        let mut rows = vec![String::new()];
+        let mut row = 0;
+        let mut col = 0;
+        let mut index = 0;
+        while index < data.len() {
+            if data[index..].starts_with(b"\x1b[2K") {
+                rows[row].clear();
+                index += 4;
+                continue;
+            }
+            if data[index..].starts_with(b"\x1b[K") {
+                rows[row].truncate(col);
+                index += 3;
+                continue;
+            }
+            match data[index] {
+                b'\r' => col = 0,
+                b'\n' => {
+                    row += 1;
+                    col = 0;
+                    if row == rows.len() {
+                        rows.push(String::new());
+                    }
+                }
+                byte => {
+                    let line = &mut rows[row];
+                    let ch = byte as char;
+                    if col < line.len() {
+                        line.replace_range(col..col + 1, &ch.to_string());
+                    } else {
+                        line.extend(std::iter::repeat_n(' ', col - line.len()));
+                        line.push(ch);
+                    }
+                    col += 1;
+                }
+            }
+            index += 1;
+        }
+        rows
+    }
+
     struct Outcome {
         status: std::process::ExitStatus,
         during: libc::tcflag_t,
@@ -252,6 +392,15 @@ mod tests {
     }
 
     fn drive_prompt(test_name: &str, mode: &str, result: Option<&std::path::Path>) -> Outcome {
+        drive_prompt_finish(test_name, mode, result, None)
+    }
+
+    fn drive_prompt_finish(
+        test_name: &str,
+        mode: &str,
+        result: Option<&std::path::Path>,
+        finish: Option<&str>,
+    ) -> Outcome {
         if std::env::var("TUES_TTY_PROMPT_CHILD").as_deref() == Ok(mode) {
             child_main(mode);
         }
@@ -272,12 +421,20 @@ mod tests {
         if let Some(path) = result {
             command.env("TUES_TTY_RESULT", path);
         }
+        if let Some(finish) = finish {
+            command.env("TUES_TTY_FINISH", finish);
+            command.env("TUES_TTY_MARKER", "1");
+        }
         let mut child = command.spawn().unwrap();
-        let output = read_until(master, b"password", Duration::from_secs(5));
+        let mut output = Vec::new();
+        read_until(master, &mut output, b"password", Duration::from_secs(5));
         let saw_prompt = output.windows(8).any(|window| window == b"password");
         let during = lflag(inspect);
         if mode == "read" {
             write_all(master, b"s3cret\n");
+            if finish.is_some() {
+                read_until(master, &mut output, b"AFTER", Duration::from_secs(5));
+            }
         } else if saw_prompt {
             write_all(master, &[0x03]);
         }
@@ -301,13 +458,26 @@ mod tests {
             eprintln!("tty: {err}");
             std::process::exit(2);
         }
-        let mut prompter = TtyPrompter;
+        let finish = match std::env::var("TUES_TTY_FINISH").ok().as_deref() {
+            Some("current") => super::PasswordPromptFinish::CurrentLine,
+            Some("erase") => super::PasswordPromptFinish::Erase,
+            _ => super::PasswordPromptFinish::Newline,
+        };
+        let mut prompter = TtyPrompter::with(finish);
         match prompter.prompt(&PasswordRequest::login("h", 22, "alice")) {
             Ok(password) => {
                 if mode == "read"
                     && let Ok(path) = std::env::var("TUES_TTY_RESULT")
                 {
                     std::fs::write(path, password.expose_secret()).unwrap();
+                }
+                if std::env::var_os("TUES_TTY_MARKER").is_some() {
+                    let mut tty = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open("/dev/tty")
+                        .unwrap();
+                    tty.write_all(b"AFTER").unwrap();
+                    tty.flush().unwrap();
                 }
                 std::process::exit(0);
             }
@@ -381,12 +551,12 @@ mod tests {
         }
     }
 
-    fn read_until(fd: libc::c_int, needle: &[u8], timeout: Duration) -> Vec<u8> {
-        let mut buf = Vec::new();
+    fn read_until(fd: libc::c_int, buf: &mut Vec<u8>, needle: &[u8], timeout: Duration) {
         let start = Instant::now();
         while start.elapsed() < timeout {
-            if buf.windows(needle.len()).any(|window| window == needle) {
-                return buf;
+            if needle.len() <= buf.len() && buf.windows(needle.len()).any(|window| window == needle)
+            {
+                return;
             }
             let mut pollfd = libc::pollfd {
                 fd,
@@ -404,7 +574,6 @@ mod tests {
                 buf.extend_from_slice(&tmp[..n as usize]);
             }
         }
-        buf
     }
 
     fn wait_child(child: &mut std::process::Child, timeout: Duration) -> std::process::ExitStatus {
@@ -419,5 +588,20 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+#[cfg(test)]
+mod sequence {
+    use super::PasswordPromptFinish;
+
+    #[test]
+    fn terminal_sequences() {
+        assert_eq!(PasswordPromptFinish::Newline.terminal_sequence(), b"\n");
+        assert_eq!(PasswordPromptFinish::CurrentLine.terminal_sequence(), b"");
+        assert_eq!(
+            PasswordPromptFinish::Erase.terminal_sequence(),
+            b"\r\x1b[2K"
+        );
     }
 }

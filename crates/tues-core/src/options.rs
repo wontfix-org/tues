@@ -536,7 +536,7 @@ impl ConnectOptions {
         let password_manager = self
             .password_manager
             .clone()
-            .unwrap_or_else(|| shared(MemoizingPasswordManager::new(TtyPrompter)));
+            .unwrap_or_else(|| shared(MemoizingPasswordManager::new(TtyPrompter::new())));
 
         let mut set_env = self.set_env.clone();
         for (name, value) in &params.set_env {

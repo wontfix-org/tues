@@ -114,7 +114,12 @@ except OSError as exc:
 
 mode = sys.argv[1]
 if mode == "read":
-    password = tues.PasswordManager().get("Password: ")
+    if len(sys.argv) > 2:
+        finish = getattr(tues.PasswordPromptFinish, sys.argv[2])
+        manager = tues.PasswordManager(prompt_finish=finish)
+    else:
+        manager = tues.PasswordManager()
+    password = manager.get("Password: ")
     sys.stdout.write("PW=%s\n" % password)
     sys.stdout.flush()
 elif mode == "interrupt":
@@ -167,6 +172,41 @@ def _read_master(master, timeout, until=None):
     return buf
 
 
+def _screen(data: bytes) -> list[str]:
+    """Replay CR, LF, and erase-line sequences the way a terminal would."""
+    rows = [""]
+    row = 0
+    col = 0
+    index = 0
+    while index < len(data):
+        if data.startswith(b"\x1b[2K", index):
+            rows[row] = ""
+            index += 4
+            continue
+        if data.startswith(b"\x1b[K", index):
+            rows[row] = rows[row][:col]
+            index += 3
+            continue
+        byte = data[index]
+        index += 1
+        if byte == 0x0D:
+            col = 0
+        elif byte == 0x0A:
+            row += 1
+            col = 0
+            if row == len(rows):
+                rows.append("")
+        else:
+            ch = chr(byte)
+            line = rows[row]
+            if col < len(line):
+                rows[row] = line[:col] + ch + line[col + 1 :]
+            else:
+                rows[row] = line + (" " * (col - len(line))) + ch
+            col += 1
+    return rows
+
+
 def _wait_flag(inspect, masked, want, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -206,6 +246,11 @@ def test_default_prompt_reads_a_password_and_restores_the_terminal():
         os.close(inspect)
     assert proc.returncode == 0, seen
     assert b"PW=s3cret" in seen
+    rows = _screen(seen)
+    prompt_row = next(i for i, row in enumerate(rows) if "Password:" in row)
+    pw_row = next(i for i, row in enumerate(rows) if "PW=s3cret" in row)
+    assert pw_row == prompt_row + 1, rows
+    assert rows[pw_row].startswith("PW="), rows
     assert after & termios.ECHO
     assert after & termios.ICANON
     assert after & termios.ISIG
@@ -241,6 +286,41 @@ def test_interrupted_password_prompt_restores_the_terminal():
     assert after & termios.ECHO, after
     assert after & termios.ICANON, after
     assert after & termios.ISIG, after
+
+
+@pytest.mark.parametrize("finish", ["CurrentLine", "Erase"])
+def test_password_prompt_finish(finish):
+    master, slave, inspect = _open_prompt_pty()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _TTY_CHILD, "read", finish],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        start_new_session=True,
+        env=_prompt_env(),
+    )
+    os.close(slave)
+    try:
+        seen = _read_master(master, 3, until=b"Password:")
+        assert b"Password:" in seen, seen
+        os.write(master, b"s3cret\n")
+        seen += _read_master(master, 3, until=b"PW=")
+        proc.wait(timeout=3)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        os.close(master)
+        os.close(inspect)
+    assert proc.returncode == 0, seen
+    rows = _screen(seen)
+    if finish == "CurrentLine":
+        assert b"Password: PW=" in seen, seen
+        assert any(row.startswith("Password: PW=") for row in rows), rows
+    else:
+        assert b"\r\x1b[2K" in seen, seen
+        assert "Password:" not in "\n".join(rows), rows
+        assert any(row.startswith("PW=s3cret") for row in rows), rows
 
 
 def test_host_parses_destination_and_tuple():

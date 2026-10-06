@@ -11,8 +11,8 @@ use pyo3::types::{PyDict, PyList};
 
 use tues_core::{
     ConnectOptions, Error, HostKeyPolicy, MemoizingPasswordManager, NoPasswordManager,
-    PasswordKind, PasswordManager, PasswordPrompter, SecretString, SshConfigSource,
-    StaticPasswordManager, Stdio, shared,
+    PasswordKind, PasswordManager, PasswordPromptFinish as CorePasswordPromptFinish,
+    PasswordPrompter, SecretString, SshConfigSource, StaticPasswordManager, Stdio, shared,
 };
 
 create_exception!(tues, TuesError, PyException, "Base class for tues errors.");
@@ -287,6 +287,38 @@ impl PasswordRequest {
     }
     fn __repr__(&self) -> String {
         format!("PasswordRequest({:?})", self.0.prompt_text().trim_end())
+    }
+}
+
+/// What the terminal shows after a hidden password has been read.
+///
+/// Echo is off while the password is typed, so Enter does not move the
+/// cursor. The legacy password prompt continues on the next line.
+#[pyclass(
+    eq,
+    eq_int,
+    frozen,
+    from_py_object,
+    module = "tues",
+    name = "PasswordPromptFinish"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasswordPromptFinish {
+    /// Continue at column 0 of the next line.
+    Newline,
+    /// Leave the cursor at the end of the prompt.
+    CurrentLine,
+    /// Erase the prompt so later output is not prefixed by it.
+    Erase,
+}
+
+impl From<PasswordPromptFinish> for CorePasswordPromptFinish {
+    fn from(finish: PasswordPromptFinish) -> Self {
+        match finish {
+            PasswordPromptFinish::Newline => Self::Newline,
+            PasswordPromptFinish::CurrentLine => Self::CurrentLine,
+            PasswordPromptFinish::Erase => Self::Erase,
+        }
     }
 }
 

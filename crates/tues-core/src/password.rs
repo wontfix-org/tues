@@ -5,7 +5,8 @@
 //! [`MemoizingPasswordManager`] wrapping a [`TtyPrompter`]: it prompts once on
 //! `/dev/tty` and remembers the answer per (kind, host, login user) until
 //! a driver reports that it was rejected. The prompt turns echo off and
-//! restores the previous terminal mode if it is interrupted.
+//! restores the previous terminal mode if it is interrupted. By default it
+//! then continues on the next line, which is what the legacy prompt did.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -188,13 +189,36 @@ where
 ///
 /// Echo is turned off while the password is typed. Canonical mode and
 /// signals stay enabled, and the previous terminal mode is restored if the
-/// prompt is interrupted.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TtyPrompter;
+/// prompt is interrupted. [`crate::PasswordPromptFinish`] decides whether the
+/// cursor then moves to the next line, stays put, or the prompt is erased.
+/// The default continues on the next line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TtyPrompter {
+    finish: crate::tty_prompt::PasswordPromptFinish,
+}
+
+impl TtyPrompter {
+    pub const fn new() -> Self {
+        Self {
+            finish: crate::tty_prompt::PasswordPromptFinish::Newline,
+        }
+    }
+
+    /// Prompt, then leave the terminal as `finish` describes.
+    pub const fn with(finish: crate::tty_prompt::PasswordPromptFinish) -> Self {
+        Self { finish }
+    }
+}
+
+impl Default for TtyPrompter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PasswordPrompter for TtyPrompter {
     fn prompt(&mut self, req: &PasswordRequest) -> Result<SecretString> {
-        crate::tty_prompt::read_hidden(&req.prompt_text()).map(SecretString::from)
+        crate::tty_prompt::read_hidden(&req.prompt_text(), self.finish).map(SecretString::from)
     }
 }
 
@@ -224,7 +248,7 @@ impl<P: PasswordPrompter> MemoizingPasswordManager<P> {
 
 impl Default for MemoizingPasswordManager<TtyPrompter> {
     fn default() -> Self {
-        Self::new(TtyPrompter)
+        Self::new(TtyPrompter::new())
     }
 }
 

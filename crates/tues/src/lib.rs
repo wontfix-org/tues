@@ -25,9 +25,9 @@ pub use tues_core as core;
 pub use tues_core::{
     Command as CommandSpec, CommandUser, ConnectOptions, DirEntry, Error, ExitStatus, ExposeSecret,
     FileType, HostKeyPolicy, JumpHost, MemoizingPasswordManager, Metadata, NoPasswordManager,
-    OpenOptions, Output, PasswordKind, PasswordManager, PasswordPrompter, PasswordRequest,
-    PtyConfig, ResolvedOptions, Result, SecretString, SharedPasswordManager, SshConfig,
-    SshConfigSource, StaticPasswordManager, Stdio, SudoError, TtyPrompter, shared,
+    OpenOptions, Output, PasswordKind, PasswordManager, PasswordPromptFinish, PasswordPrompter,
+    PasswordRequest, PtyConfig, ResolvedOptions, Result, SecretString, SharedPasswordManager,
+    SshConfig, SshConfigSource, StaticPasswordManager, Stdio, SudoError, TtyPrompter, shared,
 };
 
 pub use tues_sync::{
