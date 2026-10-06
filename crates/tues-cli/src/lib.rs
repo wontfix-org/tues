@@ -147,6 +147,9 @@ struct Cli {
     /// may be repeated. `SRC` goes into the remote working directory and is
     /// removed afterwards. `SRC:DST` is uploaded to `DST` and kept. Write a
     /// literal `:` as `\:` and a literal `\` as `\\`.
+    ///
+    /// Uploaded paths are exported on the remote as `$TUES_FILE1`,
+    /// `$TUES_FILE2`, … (script uploads are included last).
     #[arg(
         short = 'f',
         long = "file",
@@ -1297,9 +1300,19 @@ async fn run_host(
 ) -> Result<tues_core::ExitStatus, Error> {
     let session = Session::connect(connect_options(cli, server, pm, run.user.as_deref())).await?;
     let mut temporary = Vec::new();
-    let uploaded = match upload_files(&session, &cli.files, &mut temporary).await {
+    let mut remote_files = Vec::new();
+    let uploaded = match upload_files(&session, &cli.files, &mut temporary, &mut remote_files).await
+    {
         Ok(()) => match &run.script {
-            Some(spec) => upload_files(&session, std::slice::from_ref(spec), &mut temporary).await,
+            Some(spec) => {
+                upload_files(
+                    &session,
+                    std::slice::from_ref(spec),
+                    &mut temporary,
+                    &mut remote_files,
+                )
+                .await
+            }
             None => Ok(()),
         },
         Err(e) => Err(e),
@@ -1310,6 +1323,7 @@ async fn run_host(
                 &run.command,
                 run.pty,
                 run.universal_newlines,
+                &remote_files,
                 &session,
                 server,
                 prefix,
@@ -1331,11 +1345,13 @@ async fn run_host(
 }
 
 /// Upload every `--file`. Remote paths of temporary uploads are appended to
-/// `temporary` as they succeed, so a failure halfway still cleans up.
+/// `temporary` as they succeed, so a failure halfway still cleans up. Every
+/// remote path is also appended to `remote_files` for `$TUES_FILE*` export.
 async fn upload_files(
     session: &Session,
     files: &[FileSpec],
     temporary: &mut Vec<String>,
+    remote_files: &mut Vec<String>,
 ) -> Result<(), Error> {
     for spec in files {
         let target = match &spec.dst {
@@ -1350,6 +1366,7 @@ async fn upload_files(
             .upload(&spec.src, &target)
             .await
             .map_err(|e| Error::Other(format!("upload {} to {target}: {e}", spec.src.display())))?;
+        remote_files.push(target.clone());
         if spec.is_temporary() {
             temporary.push(target);
         }
@@ -1361,6 +1378,7 @@ async fn run_command(
     command: &str,
     pty: bool,
     universal_newlines: bool,
+    remote_files: &[String],
     session: &Session,
     server: &str,
     prefix: bool,
@@ -1369,6 +1387,9 @@ async fn run_command(
     stderr: Arc<Mutex<tokio::io::Stderr>>,
 ) -> Result<tues_core::ExitStatus, Error> {
     let mut cmd = session.shell(command).stdin(Stdio::Null);
+    for (i, path) in remote_files.iter().enumerate() {
+        cmd = cmd.env(format!("TUES_FILE{}", i + 1), path);
+    }
     if pty {
         cmd = cmd.pty_config(tues_core::PtyConfig {
             universal_newlines,

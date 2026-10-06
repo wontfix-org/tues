@@ -57,6 +57,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
       --no-ssh-config        Do not read any ssh_config
       --file <SRC[:DST]>     Upload a file or directory first; may be repeated
+                             (exported remotely as $TUES_FILE1, $TUES_FILE2, …)
       --pty                  Request a pseudo-terminal
       --no-pty               Do not request a pseudo-terminal
       --universal-newlines   With a PTY, keep remote `\n` → `\r\n` translation

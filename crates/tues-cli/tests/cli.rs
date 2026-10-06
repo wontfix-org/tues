@@ -248,6 +248,40 @@ fn file_uploads_are_temporary_unless_mapped() {
 }
 
 #[test]
+fn uploaded_files_are_exported_as_tues_file_env_vars() {
+    let f = sshd();
+    let id = std::process::id();
+    let dir = std::env::temp_dir().join(format!("tues-cli-tuesfile-{id}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("one.txt"), b"one").unwrap();
+    std::fs::write(dir.join("two.txt"), b"two").unwrap();
+    let kept = format!("/tmp/tues-cli-tuesfile-kept-{id}");
+
+    let out = tues()
+        .arg("--no-pty")
+        .arg("-f")
+        .arg(dir.join("one.txt"))
+        .arg("-f")
+        .arg(format!("{}:{kept}", dir.join("two.txt").display()))
+        .arg("printf '%s\\n' \"$TUES_FILE1\" \"$TUES_FILE2\"; cat \"$TUES_FILE1\" \"$TUES_FILE2\"")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("one.txt\n{kept}\nonetwo")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn removing_a_temporary_upload_yourself_is_only_a_warning() {
     let f = sshd();
     let id = std::process::id();
