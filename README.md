@@ -72,7 +72,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --path <DIR>           Script search directory; may be repeated
       --show-hosts           Print the hosts on stderr, then run the command
       --sort-hosts           Sort hosts alphabetically before running
-  -v, --verbose...           Verbose logging
+  -v, --verbose              Print start/finish lines for each host
   -q, --quiet                Suppress verbose status lines
       --debug                Print detailed error information
 ```

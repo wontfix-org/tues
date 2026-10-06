@@ -260,17 +260,17 @@ struct Cli {
     #[arg(long = "path", value_name = "DIR")]
     script_path: Vec<PathBuf>,
 
-    /// Verbose logging (repeat for more).
+    /// Print a start/finish line for each host on stderr.
     #[arg(
         short = 'v',
         long,
-        action = clap::ArgAction::Count,
+        action = clap::ArgAction::SetTrue,
         overrides_with = "quiet",
         env = "TUES_VERBOSE"
     )]
-    verbose: u8,
+    verbose: bool,
 
-    /// Suppress progress and per-host failure status lines.
+    /// Suppress start/finish and per-host failure status lines.
     #[arg(
         short = 'q',
         long,
@@ -498,13 +498,7 @@ where
 
 async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     let debug = cli.debug;
-    let level = match cli.verbose_level() {
-        0 if debug => "debug",
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
-    };
+    let level = if debug { "debug" } else { "warn" };
     // A host program may already have installed a subscriber; keep it.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -553,6 +547,9 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     if cli.fail_fast() {
         let mut exit_code = 0i32;
         for server in &hosts {
+            if cli.show_progress() {
+                eprintln!("Starting {server}");
+            }
             let outcome = run_host(
                 &cli,
                 &run,
@@ -563,7 +560,10 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
                 stderr.clone(),
             )
             .await;
-            if note_failure(server, &outcome, multi, cli.verbose_level(), &mut exit_code) {
+            if cli.show_progress() {
+                eprintln!("Finished {server}");
+            }
+            if note_failure(server, &outcome, multi, cli.show_progress(), &mut exit_code) {
                 break;
             }
         }
@@ -580,7 +580,13 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
         let stderr = stderr.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.expect("semaphore");
+            if cli.show_progress() {
+                eprintln!("Starting {server}");
+            }
             let outcome = run_host(&cli, &run, &server, pm, prefix, stdout, stderr).await;
+            if cli.show_progress() {
+                eprintln!("Finished {server}");
+            }
             HostResult { server, outcome }
         }));
     }
@@ -592,7 +598,13 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
 
     let mut exit_code = 0i32;
     for r in &results {
-        note_failure(&r.server, &r.outcome, multi, cli.verbose_level(), &mut exit_code);
+        note_failure(
+            &r.server,
+            &r.outcome,
+            multi,
+            cli.show_progress(),
+            &mut exit_code,
+        );
     }
     Ok(exit_code)
 }
@@ -602,14 +614,14 @@ fn note_failure(
     server: &str,
     outcome: &Result<tues_core::ExitStatus, Error>,
     multi: bool,
-    verbose: u8,
+    verbose: bool,
     exit_code: &mut i32,
 ) -> bool {
     match outcome {
         Ok(status) if status.success() => false,
         Ok(status) => {
             *exit_code = if multi { 1 } else { status.code().unwrap_or(1) };
-            if multi && verbose > 0 {
+            if multi && verbose {
                 eprintln!("{server}: {status}");
             }
             true
@@ -659,9 +671,9 @@ impl Cli {
         }
     }
 
-    /// Effective `-v` count; `-q` forces quiet.
-    fn verbose_level(&self) -> u8 {
-        if self.quiet { 0 } else { self.verbose }
+    /// Effective verbosity for status lines; `-q` forces quiet.
+    fn show_progress(&self) -> bool {
+        self.verbose && !self.quiet
     }
 }
 
@@ -1624,7 +1636,7 @@ mod tests {
             "h",
             &Ok(ExitStatus::from_code(0)),
             false,
-            0,
+            false,
             &mut code
         ));
         assert_eq!(code, 0);
@@ -1634,7 +1646,7 @@ mod tests {
             "h",
             &Ok(ExitStatus::from_code(7)),
             false,
-            0,
+            false,
             &mut code
         ));
         assert_eq!(code, 7);
@@ -1642,7 +1654,7 @@ mod tests {
             "h",
             &Ok(ExitStatus::from_signal("TERM")),
             false,
-            0,
+            false,
             &mut code
         ));
         assert_eq!(code, 1);
@@ -1650,13 +1662,13 @@ mod tests {
             "h",
             &Err(Error::Other("boom".into())),
             false,
-            0,
+            false,
             &mut code
         ));
         assert_eq!(code, 255);
 
         // Among several hosts any failure is 1, quietly unless verbose.
-        for verbose in [0, 1] {
+        for verbose in [false, true] {
             code = 0;
             assert!(super::note_failure(
                 "h",
@@ -1672,7 +1684,7 @@ mod tests {
             "h",
             &Err(Error::Other("boom".into())),
             true,
-            0,
+            false,
             &mut code
         ));
         assert_eq!(code, 1);
@@ -1745,11 +1757,11 @@ mod tests {
     }
 
     #[test]
-    fn quiet_overrides_verbose_level() {
+    fn quiet_overrides_verbose_progress() {
         let cli = super::Cli::try_parse_from(["tues", "-v", "true", "cl", "h"]).unwrap();
-        assert_eq!(cli.verbose_level(), 1);
+        assert!(cli.show_progress());
         let cli = super::Cli::try_parse_from(["tues", "-v", "-q", "true", "cl", "h"]).unwrap();
-        assert_eq!(cli.verbose_level(), 0);
+        assert!(!cli.show_progress());
         assert!(cli.quiet);
     }
 

@@ -412,6 +412,14 @@ fn verbose_reports_the_status_of_each_failed_host() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("Starting {}", f.host)),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("Finished {}", f.host)),
+        "{stderr}"
+    );
     assert_eq!(
         stderr
             .lines()
