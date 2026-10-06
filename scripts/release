@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [--dry-run] [--rc]
+Usage: scripts/release [-d|--dry-run] [--rc]
                        [--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
@@ -76,12 +76,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
         usage=(
-            "scripts/release [--dry-run] [--rc] "
+            "scripts/release [-d|--dry-run] [--rc] "
             "[--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
     )
     parser.add_argument(
+        "-d",
         "--dry-run",
         action="store_true",
         help="print the plan and stop (skips commit, tag, build, and upload)",
