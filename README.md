@@ -686,23 +686,6 @@ and tagged (`v0.3.0-rc.1`). `dist/latest` and `dist/rc` point at it;
 git push origin HEAD v0.3.0-rc.1
 ```
 
-`--preview` builds a throwaway version instead of tagging a release. With no
-version it starts from the workspace version:
-
-```sh
-just preview
-# 0.1.0.post1.dev1+mvb.20260927.2dcc43d
-just preview --upload
-```
-
-`just preview` calls `scripts/release --preview`. A version and other flags are
-passed through (`just preview 0.2.0 --dry-run`).
-
-The local part is `$USER`, the UTC date `YYYYMMDD`, and the short commit
-hash. Nothing is committed; `Cargo.toml` and `Cargo.lock` are restored after
-the wheels are written. A preview updates `dist/latest` and leaves
-`dist/stable` where it is.
-
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
 ephemeral host port. The Rust tests do this through the `testcontainers` crate;

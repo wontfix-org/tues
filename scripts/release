@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [--dry-run] [--preview] [--rc] [--upload]
-                       [--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]
+Usage: scripts/release [--dry-run] [--rc] [--upload]
+                       [--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). The script commits the version bump, creates an annotated tag
 vVERSION, and writes a release sdist plus one wheel per configured CPython
 to dist/<version>/. It does not push the tag. dist/latest points at the
 version just built. dist/stable points at the newest tagged final release
-and is left alone for a --preview or --rc build.
+and is left alone for a --rc build.
 
 --upload publishes the built artifacts with ``uv publish`` (using uv's
 configured index and credentials). Without it, the script prints the
 upload command instead.
-
---preview builds VERSION.post1.dev1+$USER.$ISODATE.$COMMIT instead, from the
-workspace version when VERSION is omitted. That build is not committed or
-tagged, and the manifest is restored afterwards. The manifest itself uses a
-hyphen (`-post1`) because Cargo versions are SemVer; PEP 440 normalizes it
-back to `.post1`. The local part is dot-separated: a second `+` is not a
-legal version character.
 
 --rc builds a release candidate of VERSION. A plain VERSION such as 0.3.0
 selects the next free candidate (0.3.0rc1, then 0.3.0rc2, from the local
@@ -40,13 +33,11 @@ rather than for the host glibc. Docker is required.
 from __future__ import annotations
 
 import argparse
-import getpass
 import os
 import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -86,20 +77,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
         usage=(
-            "scripts/release [--dry-run] [--preview] [--rc] [--upload] "
-            "[--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]"
+            "scripts/release [--dry-run] [--rc] [--upload] "
+            "[--python 3.9,3.10,3.11,3.12,3.13,3.14] VERSION"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and stop")
-    parser.add_argument(
-        "--preview",
-        action="store_true",
-        help=(
-            "build VERSION.post1.dev1+$USER.$YYYYMMDD.$COMMIT without committing "
-            "or tagging (VERSION defaults to the workspace version)"
-        ),
-    )
     parser.add_argument(
         "--rc",
         action="store_true",
@@ -120,9 +103,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "version",
-        nargs="?",
         metavar="VERSION",
-        help="release version, e.g. 0.2.0; optional with --preview",
+        help="release version, e.g. 0.2.0",
     )
     return parser.parse_args(argv)
 
@@ -187,37 +169,15 @@ def rewrite_cargo_toml(old: str, new: str) -> None:
     CARGO_TOML.write_text("".join(out))
 
 
-def preview_version(base: str) -> str:
-    """Cargo spelling of ``base.post1.dev1+user.date.commit``.
-
-    PEP 440 treats ``-post1`` and ``.post1`` as the same public version. The
-    local segments stay dot-separated so the string is one legal version.
-    """
-    if not PLAIN_VERSION_RE.match(base):
-        raise ReleaseError(
-            f"a preview is built from a plain release version, not {base}", code=2
-        )
-    # $USER when the environment has it; otherwise the login name.
-    user = re.sub(r"[^0-9A-Za-z]", "", getpass.getuser())
-    if not user:
-        raise ReleaseError("the user name has no letters or digits", code=2)
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    commit = git("rev-parse", "--short", "HEAD", capture=True).stdout.strip()
-    if not re.fullmatch(r"[0-9a-fA-F]+", commit):
-        raise ReleaseError(f"not a commit hash: {commit}")
-    return f"{base}-post1.dev1+{user}.{today}.{commit}"
-
-
 def published_version(cargo_version: str) -> str:
     """The PEP 440 spelling of a version stored for Cargo.
 
-    ``0.3.0-rc.1`` is the pre-release ``0.3.0rc1``. ``-post1`` is the public
-    ``.post1`` used by preview builds.
+    ``0.3.0-rc.1`` is the pre-release ``0.3.0rc1``.
     """
     match = RC_CARGO_RE.match(cargo_version)
     if match:
         return f"{match.group('base')}rc{match.group('n')}"
-    return cargo_version.replace("-post1.", ".post1.", 1)
+    return cargo_version
 
 
 def parse_rc_request(text: str) -> tuple[str, Optional[int]]:
@@ -417,29 +377,17 @@ def main(argv: Sequence[str]) -> int:
         if not PYTHON_RE.match(py):
             raise ReleaseError(f"not a Python version: {py}", code=2)
 
-    if args.preview and args.rc:
-        raise ReleaseError("pass only one of --preview and --rc", code=2)
-    if args.version is None and not args.preview:
-        raise ReleaseError("a version is required (or pass --preview)", code=2)
-    given = None
-    if args.version is not None:
-        given = args.version[1:] if args.version.startswith("v") else args.version
+    given = args.version[1:] if args.version.startswith("v") else args.version
 
     current = workspace_version()
     candidate = False
-    if args.preview:
-        if given is not None and not VERSION_RE.match(given):
-            raise ReleaseError(f"not a version: {args.version}", code=2)
-        version = preview_version(given if given is not None else current)
-    elif args.rc:
-        assert given is not None
+    if args.rc:
         base, number = parse_rc_request(given)
         if number is None:
             number = next_rc_number(base)
         version = cargo_rc_version(base, number)
         candidate = True
     else:
-        assert given is not None
         if not VERSION_RE.match(given):
             raise ReleaseError(f"not a version: {args.version}", code=2)
         version = given
@@ -456,39 +404,7 @@ def main(argv: Sequence[str]) -> int:
         f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
         f"in {IMAGE} and write them to dist/{public}/"
     )
-    upload_target = "latest" if args.preview else ("rc" if candidate else "stable")
-    if args.preview:
-        if args.dry_run:
-            print(f"would set version {current} -> {public} for the build only")
-            print("would not commit or tag, and would restore Cargo.toml and Cargo.lock")
-            print(wheels)
-            print(f"would point dist/latest at {public}")
-            if args.upload:
-                print(f"would upload dist/{public}/* with uv publish")
-            return 0
-        print(f"preview {public}")
-        rewrite_cargo_toml(current, version)
-        try:
-            refreshed = run(
-                ["cargo", "metadata", "--offline", "--format-version", "1"],
-                capture=True,
-                check=False,
-            )
-            if refreshed.returncode != 0:
-                raise ReleaseError("cargo metadata rejected the preview version")
-            out = build(pythons, public)
-            publish(public, stable=False)
-        finally:
-            restore_manifests()
-        show_artifacts(out)
-        print()
-        print(f"dist/latest -> {public}")
-        print("The preview version was not committed.")
-        if args.upload:
-            upload_artifacts(out)
-        else:
-            print_upload_hint(upload_target)
-        return 0
+    upload_target = "rc" if candidate else "stable"
 
     need_commit = False
     need_tag = False
