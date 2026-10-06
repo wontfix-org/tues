@@ -258,8 +258,24 @@ struct Cli {
     script_path: Vec<PathBuf>,
 
     /// Verbose logging (repeat for more).
-    #[arg(short = 'v', long, action = clap::ArgAction::Count, env = "TUES_VERBOSE")]
+    #[arg(
+        short = 'v',
+        long,
+        action = clap::ArgAction::Count,
+        overrides_with = "quiet",
+        env = "TUES_VERBOSE"
+    )]
     verbose: u8,
+
+    /// Suppress progress and per-host failure status lines.
+    #[arg(
+        short = 'q',
+        long,
+        action = clap::ArgAction::SetTrue,
+        overrides_with = "verbose",
+        env = "TUES_QUIET"
+    )]
+    quiet: bool,
 
     /// Print the resolved hosts on stderr, then run the command.
     #[arg(long, action = clap::ArgAction::SetTrue, env = "TUES_SHOW_HOSTS")]
@@ -469,7 +485,7 @@ where
 }
 
 async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
-    let level = match cli.verbose {
+    let level = match cli.verbose_level() {
         0 => "warn",
         1 => "info",
         2 => "debug",
@@ -533,7 +549,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
                 stderr.clone(),
             )
             .await;
-            if note_failure(server, &outcome, multi, cli.verbose, &mut exit_code) {
+            if note_failure(server, &outcome, multi, cli.verbose_level(), &mut exit_code) {
                 break;
             }
         }
@@ -562,7 +578,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
 
     let mut exit_code = 0i32;
     for r in &results {
-        note_failure(&r.server, &r.outcome, multi, cli.verbose, &mut exit_code);
+        note_failure(&r.server, &r.outcome, multi, cli.verbose_level(), &mut exit_code);
     }
     Ok(exit_code)
 }
@@ -627,6 +643,11 @@ impl Cli {
             None if self.parallel => PARALLEL_JOBS,
             None => 1,
         }
+    }
+
+    /// Effective `-v` count; `-q` forces quiet.
+    fn verbose_level(&self) -> u8 {
+        if self.quiet { 0 } else { self.verbose }
     }
 }
 
@@ -1685,6 +1706,15 @@ mod tests {
         assert_eq!(cli.prefix_setting(), Some(false));
         let cli = super::Cli::try_parse_from(["tues", "-N", "-P", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.prefix_setting(), Some(true));
+    }
+
+    #[test]
+    fn quiet_overrides_verbose_level() {
+        let cli = super::Cli::try_parse_from(["tues", "-v", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 1);
+        let cli = super::Cli::try_parse_from(["tues", "-v", "-q", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 0);
+        assert!(cli.quiet);
     }
 
     #[test]

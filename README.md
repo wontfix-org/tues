@@ -72,6 +72,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
       --show-hosts           Print the hosts on stderr, then run the command
       --sort-hosts           Sort hosts alphabetically before running
   -v, --verbose...           Verbose logging
+  -q, --quiet                Suppress verbose status lines
 ```
 
 Most options also read a matching `TUES_*` environment variable (for example
