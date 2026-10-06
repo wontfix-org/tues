@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [--dry-run] [--preview] [--rc] [--python 3.9,3.11,3.12,3.13] [VERSION]
+Usage: scripts/release [--dry-run] [--preview] [--rc] [--upload]
+                       [--python 3.9,3.11,3.12,3.13] [VERSION]
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). The script commits the version bump, creates an annotated tag
 vVERSION, and writes a release sdist plus one wheel per configured CPython
-to dist/<version>/. It does not push the tag or upload the files. dist/latest
-points at the version just built. dist/stable points at the newest tagged
-final release and is left alone for a --preview or --rc build.
+to dist/<version>/. It does not push the tag. dist/latest points at the
+version just built. dist/stable points at the newest tagged final release
+and is left alone for a --preview or --rc build.
+
+--upload publishes the built artifacts with ``uv publish`` (using uv's
+configured index and credentials). Without it, the script prints the
+upload command instead.
 
 --preview builds VERSION.post1.dev1+$USER.$ISODATE.$COMMIT instead, from the
 workspace version when VERSION is omitted. That build is not committed or
@@ -81,7 +86,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
         usage=(
-            "scripts/release [--dry-run] [--preview] [--rc] "
+            "scripts/release [--dry-run] [--preview] [--rc] [--upload] "
             "[--python 3.9,3.11,3.12,3.13] [VERSION]"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
@@ -102,6 +107,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "commit and tag the next release candidate of VERSION "
             "(0.3.0 -> 0.3.0-rc.1, published as 0.3.0rc1)"
         ),
+    )
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="upload built artifacts with uv publish",
     )
     parser.add_argument(
         "--python",
@@ -379,6 +389,20 @@ def show_artifacts(directory: Path) -> None:
         print(artifact.name)
 
 
+def upload_artifacts(directory: Path) -> None:
+    """Publish every file in ``directory`` with ``uv publish``."""
+    artifacts = sorted(path for path in directory.iterdir() if path.is_file())
+    if not artifacts:
+        raise ReleaseError(f"no artifacts in {directory}")
+    run(["uv", "publish", *(str(path) for path in artifacts)])
+
+
+def print_upload_hint(link_name: str) -> None:
+    print("Upload the artifacts with:")
+    print(f"  uv publish dist/{link_name}/*")
+    print("or pass --upload.")
+
+
 def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
 
@@ -432,12 +456,15 @@ def main(argv: Sequence[str]) -> int:
         f"would build one wheel per Python {' '.join(pythons)}, plus an sdist, "
         f"in {IMAGE} and write them to dist/{public}/"
     )
+    upload_target = "latest" if args.preview else ("rc" if candidate else "stable")
     if args.preview:
         if args.dry_run:
             print(f"would set version {current} -> {public} for the build only")
             print("would not commit or tag, and would restore Cargo.toml and Cargo.lock")
             print(wheels)
             print(f"would point dist/latest at {public}")
+            if args.upload:
+                print(f"would upload dist/{public}/* with uv publish")
             return 0
         print(f"preview {public}")
         rewrite_cargo_toml(current, version)
@@ -456,10 +483,11 @@ def main(argv: Sequence[str]) -> int:
         show_artifacts(out)
         print()
         print(f"dist/latest -> {public}")
-        print("The preview version was not committed. Upload the artifacts with:")
-        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/latest/*')
-        print("or:")
-        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/latest/*')
+        print("The preview version was not committed.")
+        if args.upload:
+            upload_artifacts(out)
+        else:
+            print_upload_hint(upload_target)
         return 0
 
     need_commit = False
@@ -491,6 +519,8 @@ def main(argv: Sequence[str]) -> int:
             )
         else:
             print(f"would point dist/latest and dist/stable at {public}")
+        if args.upload:
+            print(f"would upload dist/{public}/* with uv publish")
         return 0
 
     if need_commit:
@@ -529,15 +559,10 @@ def main(argv: Sequence[str]) -> int:
             f"the version is requested (tues=={public}) or --pre is given."
         )
         print()
-        print("Upload the artifacts to an internal index with:")
-        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/rc/*')
-        print("or:")
-        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/rc/*')
+    if args.upload:
+        upload_artifacts(out)
     else:
-        print("Upload the artifacts to an internal index with:")
-        print('  twine upload --repository-url "$TUES_PYPI_URL" dist/stable/*')
-        print("or:")
-        print('  uv publish --publish-url "$TUES_PYPI_URL" dist/stable/*')
+        print_upload_hint(upload_target)
     return 0
 
 

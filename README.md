@@ -616,23 +616,18 @@ so uploads and downloads run as the command user rather than the login user.
 
 ## Development
 
-Requirements: Rust 1.90+, Docker (for the integration tests), Python 3.9+ with
-[`uv`](https://docs.astral.sh/uv/), and [`just`](https://github.com/casey/just).
+Requirements: Rust 1.90+ (`cargo`, `rustup`), Docker (for the integration tests),
+Python 3.9+ with [`uv`](https://docs.astral.sh/uv/), and
+[`just`](https://github.com/casey/just).
 
 ```sh
-uv venv && source .venv/bin/activate
-uv pip install maturin pytest coverage 'testcontainers>=4.10'
-maturin develop --release
+just setup                                   # .venv, maturin develop, llvm-cov tools
 
 cargo test --workspace                       # Rust tests and the pytest suite
 cargo clippy --workspace --all-targets
 pytest                                       # Python tests only
 
-# Per-file coverage for the Rust crates and python/tues.
-# One-time setup: rustup component add llvm-tools-preview
-#                 cargo install cargo-llvm-cov --locked
-just test
-
+just test                                    # Per-file coverage for Rust and python/tues
 cargo coverage                               # HTML report: target/llvm-cov/html
 ```
 
@@ -644,12 +639,13 @@ wheel per CPython into `dist/<version>/` for an internal index. Each wheel
 carries the extension module and the `tues` console script. Older version
 directories are left in place. `dist/latest` points at the version just
 built, and `dist/stable` points at the newest tagged final release. The tag
-is not pushed and the artifacts are not uploaded.
+is not pushed. Pass `--upload` to publish the artifacts with `uv publish`
+(uv's configured index and credentials); otherwise the script prints the
+upload command.
 
 ```sh
-just release 0.2.0
+just release 0.2.0 --upload
 git push origin HEAD v0.2.0
-twine upload --repository-url "$TUES_PYPI_URL" dist/stable/*
 ```
 
 `just release` calls `scripts/release` with the version. Further arguments are
@@ -658,6 +654,7 @@ passed through:
 ```sh
 just release 0.2.0 --dry-run
 just release 0.2.0 --python 3.12
+just release 0.2.0 --upload
 ```
 
 By default that is Python 3.9, 3.11, 3.12 and 3.13. The build runs in the
@@ -675,6 +672,7 @@ candidate itself:
 just rc 0.3.0
 # Cargo.toml 0.3.0-rc.1, wheels named 0.3.0rc1
 just rc 0.3.0rc2 --dry-run
+just rc 0.3.0 --upload
 ```
 
 Cargo stores `X.Y.Z-rc.N`. That is SemVer, and PEP 440 normalizes it to
@@ -686,7 +684,6 @@ and tagged (`v0.3.0-rc.1`). `dist/latest` and `dist/rc` point at it;
 
 ```sh
 git push origin HEAD v0.3.0-rc.1
-twine upload --repository-url "$TUES_PYPI_URL" dist/rc/*
 ```
 
 `--preview` builds a throwaway version instead of tagging a release. With no
@@ -695,6 +692,7 @@ version it starts from the workspace version:
 ```sh
 just preview
 # 0.1.0.post1.dev1+mvb.20260927.2dcc43d
+just preview --upload
 ```
 
 `just preview` calls `scripts/release --preview`. A version and other flags are

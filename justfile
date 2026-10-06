@@ -1,16 +1,35 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# Create .venv, install build deps, and build the extension (expects uv, cargo, rustup).
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    for cmd in uv cargo rustup; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "$cmd is required on PATH" >&2
+            exit 1
+        fi
+    done
+    uv venv
+    uv pip install --group dev
+    .venv/bin/maturin develop --release
+    rustup component add llvm-tools-preview
+    if ! cargo llvm-cov --version >/dev/null 2>&1; then
+        cargo install cargo-llvm-cov --locked
+    fi
+
 # Run the Rust and Python tests, then print per-file coverage.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
     if ! cargo llvm-cov --version >/dev/null 2>&1; then
-        echo "cargo-llvm-cov is required: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked" >&2
+        echo "cargo-llvm-cov is required: just setup" >&2
         exit 1
     fi
     if [[ ! -x .venv/bin/python ]]; then
-        echo "create .venv and install pytest and coverage first (see README Development)" >&2
+        echo "create .venv and install pytest and coverage first (just setup)" >&2
         exit 1
     fi
     export TUES_COVERAGE=1
