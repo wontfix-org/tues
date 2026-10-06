@@ -4,11 +4,11 @@
 //! which can be replaced by any implementation. The default is
 //! [`MemoizingPasswordManager`] wrapping a [`TtyPrompter`]: it prompts once on
 //! `/dev/tty` and remembers the answer per (kind, host, login user) until
-//! a driver reports that it was rejected.
+//! a driver reports that it was rejected. The prompt turns echo off and
+//! restores the previous terminal mode if it is interrupted.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -185,21 +185,16 @@ where
 }
 
 /// Prompts on the controlling terminal (`/dev/tty`), never on stdin.
+///
+/// Echo is turned off while the password is typed. Canonical mode and
+/// signals stay enabled, and the previous terminal mode is restored if the
+/// prompt is interrupted.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TtyPrompter;
 
 impl PasswordPrompter for TtyPrompter {
     fn prompt(&mut self, req: &PasswordRequest) -> Result<SecretString> {
-        let mut tty = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/tty")
-            .map_err(|e| Error::Password(format!("cannot open /dev/tty: {e}")))?;
-        tty.write_all(req.prompt_text().as_bytes())?;
-        tty.flush()?;
-        let pw = rpassword::read_password()
-            .map_err(|e| Error::Password(format!("reading from tty failed: {e}")))?;
-        Ok(SecretString::from(pw))
+        crate::tty_prompt::read_hidden(&req.prompt_text()).map(SecretString::from)
     }
 }
 

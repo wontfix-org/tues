@@ -20,6 +20,7 @@ pub mod process;
 pub mod shell;
 pub mod ssh_config;
 pub mod sudo;
+mod tty_prompt;
 
 /// Byte buffer type used by [`Event`] and [`Effect`].
 pub use bytes::Bytes;

@@ -2,13 +2,21 @@
 
 import io
 import os
+import pty
+import select
+import signal
 import stat
+import subprocess
+import sys
+import termios
+import threading
+import time
 
 import pytest
 
 import tues
 
-from conftest import NOPASSWD_USER, USER
+from conftest import NOPASSWD_USER, PASSWORD, USER
 
 
 def _opts(sshd, **extra):
@@ -38,6 +46,201 @@ def test_password_manager_uses_preset_and_env(monkeypatch):
     assert tues.PasswordManager(password="fixed").get("prompt") == "fixed"
     monkeypatch.setenv("TUES_PW", "from-env")
     assert tues.PasswordManager().get() == "from-env"
+
+
+def test_password_manager_remembers_a_refusal_until_invalidate():
+    answers = iter([None, "later"])
+    pm = tues.PasswordManager(prompt=lambda message: next(answers))
+    assert pm.get("Password: ") is None
+    assert pm.get("again") is None
+    pm.invalidate()
+    assert pm.get("again") == "later"
+
+
+def test_password_manager_prompts_once_when_callers_overlap():
+    """The pool_size > 1 race: every host used to ask before the first answer was stored."""
+    started = threading.Event()
+    release = threading.Event()
+    entered = threading.Barrier(4)
+    calls = []
+
+    def prompt(message):
+        calls.append(message)
+        started.set()
+        assert release.wait(5)
+        return "secret"
+
+    pm = tues.PasswordManager(prompt=prompt)
+    results = []
+    errors = []
+
+    def worker():
+        entered.wait()
+        try:
+            results.append(pm.get("Password: "))
+        except Exception as exc:  # noqa: BLE001 — the assertion reports it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    assert started.wait(2)
+    time.sleep(0.05)
+    assert calls == ["Password: "]
+    release.set()
+    for thread in threads:
+        thread.join(5)
+        assert not thread.is_alive()
+    assert errors == []
+    assert sorted(results) == ["secret"] * 4
+
+
+_TTY_CHILD = r"""
+import fcntl
+import os
+import sys
+import termios
+import threading
+import time
+
+import tues
+from tues.legacy import _sigint_kills
+
+try:
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+except OSError as exc:
+    sys.stderr.write("tty: %s\n" % exc)
+    os._exit(2)
+
+mode = sys.argv[1]
+if mode == "read":
+    password = tues.PasswordManager().get("Password: ")
+    sys.stdout.write("PW=%s\n" % password)
+    sys.stdout.flush()
+elif mode == "interrupt":
+    def ask():
+        tues.PasswordManager().get("Password: ")
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    with _sigint_kills([]):
+        try:
+            time.sleep(60)
+        except KeyboardInterrupt:
+            thread.join(2)
+            os._exit(0 if not thread.is_alive() else 3)
+    os._exit(4)
+else:
+    os._exit(5)
+"""
+
+
+def _prompt_env():
+    env = os.environ.copy()
+    source = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env["PYTHONPATH"] = source + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+def _open_prompt_pty():
+    master, slave = pty.openpty()
+    inspect = os.dup(slave)
+    return master, slave, inspect
+
+
+def _read_master(master, timeout, until=None):
+    buf = b""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if until is not None and until in buf:
+            return buf
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(master, 1024)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _wait_flag(inspect, masked, want, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        flags = termios.tcgetattr(inspect)[3]
+        if flags & masked == want:
+            return flags
+        time.sleep(0.02)
+    return termios.tcgetattr(inspect)[3]
+
+
+def test_default_prompt_reads_a_password_and_restores_the_terminal():
+    master, slave, inspect = _open_prompt_pty()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _TTY_CHILD, "read"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        start_new_session=True,
+        env=_prompt_env(),
+    )
+    os.close(slave)
+    try:
+        seen = _read_master(master, 3, until=b"Password:")
+        assert b"Password:" in seen, seen
+        during = _wait_flag(inspect, termios.ECHO | termios.ICANON | termios.ISIG, termios.ICANON | termios.ISIG, 2)
+        assert during & termios.ECHO == 0
+        assert during & termios.ICANON
+        os.write(master, b"s3cret\n")
+        seen += _read_master(master, 3, until=b"PW=")
+        proc.wait(timeout=3)
+        after = termios.tcgetattr(inspect)[3]
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        os.close(master)
+        os.close(inspect)
+    assert proc.returncode == 0, seen
+    assert b"PW=s3cret" in seen
+    assert after & termios.ECHO
+    assert after & termios.ICANON
+    assert after & termios.ISIG
+
+
+def test_interrupted_password_prompt_restores_the_terminal():
+    master, slave, inspect = _open_prompt_pty()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _TTY_CHILD, "interrupt"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        start_new_session=True,
+        env=_prompt_env(),
+    )
+    os.close(slave)
+    try:
+        seen = _read_master(master, 3, until=b"Password:")
+        assert b"Password:" in seen, seen
+        during = _wait_flag(inspect, termios.ECHO | termios.ICANON | termios.ISIG, termios.ICANON | termios.ISIG, 2)
+        assert during & termios.ECHO == 0, during
+        assert during & termios.ICANON, during
+        os.kill(proc.pid, signal.SIGINT)
+        proc.wait(timeout=3)
+        after = termios.tcgetattr(inspect)[3]
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        os.close(master)
+        os.close(inspect)
+    assert proc.returncode == 0, seen
+    assert after & termios.ECHO, after
+    assert after & termios.ICANON, after
+    assert after & termios.ISIG, after
 
 
 def test_host_parses_destination_and_tuple():
@@ -347,6 +550,50 @@ def test_run_check_raises_task_error(sshd):
     assert exc.value.__cause__ is None
     assert exc.value.stdout == "out"
     assert exc.value.stderr == "err"
+
+
+def test_run_pool_asks_for_the_password_once(sshd):
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def prompt(message):
+        calls.append(message)
+        started.set()
+        assert release.wait(15)
+        return PASSWORD
+
+    pm = tues.PasswordManager(prompt=prompt)
+    holder = {}
+    errors = []
+
+    def invoke():
+        try:
+            holder["tasks"] = tues.run(
+                [sshd.host, sshd.host],
+                "id -un",
+                user="root",
+                pool_size=2,
+                capture_output=True,
+                text=True,
+                connect_options=_opts(sshd, password=None, password_manager=pm),
+            )
+        except Exception as exc:  # noqa: BLE001 — reported after the prompt is released
+            errors.append(exc)
+
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    try:
+        assert started.wait(20)
+        time.sleep(1)
+        assert len(calls) == 1
+    finally:
+        release.set()
+    thread.join(20)
+    assert not thread.is_alive()
+    assert errors == []
+    assert len(calls) == 1
+    assert [task.stdout.strip() for task in holder["tasks"]] == ["root", "root"]
 
 
 def test_run_pool_and_error_group(sshd):

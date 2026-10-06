@@ -3671,6 +3671,7 @@ version = "4.0.1"
 dependencies = [
  "bytes",
  "dirs",
+ "libc",
  "rand 0.9.5",
  "rpassword",
  "secrecy",

@@ -35,12 +35,18 @@ import json
 import locale
 import os
 import re
+import select
 import shlex
 import signal
 import subprocess
 import sys
 import threading
 import urllib.parse
+
+try:
+    import termios
+except ImportError:  # Windows has no termios; the prompt falls back to getpass.
+    termios = None  # type: ignore[assignment]
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
@@ -161,6 +167,143 @@ class TuesTaskError(TuesError):
 
 
 # ---------------------------------------------------------------------------
+# Password prompt
+#
+# ``pool_size > 1`` asks on a worker thread. Ctrl+C is delivered to the main
+# thread, and exiting from there skips the prompter's ``finally``, which is
+# what used to leave the terminal with echo disabled. The snapshot is the
+# mode from before we hid the password; the signal handler applies it, then
+# writes the wake pipe so the worker's read returns and restores it too.
+# The snapshot is published under the GIL and read from the signal handler
+# without a lock, so the handler cannot deadlock on the prompt.
+# ---------------------------------------------------------------------------
+
+_prompt_gate = threading.Lock()
+_tty_snapshot = None
+_wake_r, _wake_w = os.pipe()
+os.set_blocking(_wake_r, False)
+os.set_blocking(_wake_w, False)
+
+
+def _tty_encoding(fd: int) -> str:
+    return os.device_encoding(fd) or "utf-8"
+
+
+def _apply_tty(attrs) -> None:
+    if attrs is None or termios is None:
+        return
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except termios.error:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _interrupt_prompt() -> None:
+    """Restore the terminal and unblock a prompt on another thread."""
+    active = _tty_snapshot is not None
+    _apply_tty(_tty_snapshot)
+    if not active:
+        return
+    try:
+        os.write(_wake_w, b"x")
+    except OSError:
+        pass
+
+
+def _drain_wake() -> None:
+    while True:
+        try:
+            chunk = os.read(_wake_r, 64)
+        except OSError:
+            return
+        if not chunk:
+            return
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
+def _read_hidden_line(fd: int) -> Optional[str]:
+    chunks = []
+    while True:
+        try:
+            ready, _, _ = select.select([fd, _wake_r], [], [])
+        except KeyboardInterrupt:
+            return None
+        if _wake_r in ready:
+            _drain_wake()
+            return None
+        try:
+            data = os.read(fd, 1024)
+        except InterruptedError:
+            continue
+        if not data:
+            return None
+        chunks.append(data)
+        if b"\n" in data or b"\r" in data:
+            break
+    text = b"".join(chunks).split(b"\r", 1)[0].split(b"\n", 1)[0]
+    return text.decode(_tty_encoding(fd), "surrogateescape")
+
+
+def _ask_getpass(message: str) -> Optional[str]:
+    import getpass
+
+    try:
+        return getpass.getpass(message)
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _ask_tty(message: str) -> Optional[str]:
+    if termios is None:
+        return _ask_getpass(message)
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return _ask_getpass(message)
+    try:
+        attrs = termios.tcgetattr(fd)
+    except termios.error:
+        os.close(fd)
+        return _ask_getpass(message)
+
+    # Canonical mode stays on (ISIG too) so Ctrl+C is a signal, not a raw
+    # byte, and the line discipline still edits the password.
+    hidden = attrs[:]
+    hidden[3] = attrs[3] & ~termios.ECHO
+    global _tty_snapshot
+    # A Ctrl+C that lands as the previous prompt finishes can leave a wake
+    # byte behind. Drop it before this prompt starts waiting.
+    _drain_wake()
+    _tty_snapshot = attrs
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, hidden)
+        _write_all(fd, message.encode(_tty_encoding(fd), "replace"))
+        return _read_hidden_line(fd)
+    except (EOFError, KeyboardInterrupt):
+        return None
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        except termios.error:
+            pass
+        _tty_snapshot = None
+        os.close(fd)
+        _drain_wake()
+
+
+# ---------------------------------------------------------------------------
 # Password manager (original get/invalidate, also the Session protocol)
 # ---------------------------------------------------------------------------
 
@@ -169,49 +312,58 @@ class PasswordManager:
     """Cache one password for login and sudo.
 
     A constructed password, or ``TUES_PW`` in the environment, is reused until
-    :meth:`invalidate`. Otherwise :meth:`get` prompts once. The same object
-    satisfies :meth:`Session.connect`'s ``password_manager`` protocol
+    :meth:`invalidate`. Otherwise :meth:`get` prompts once, including when
+    several hosts ask together: one caller prompts and the others wait for
+    that answer. A refusal (``None``) is remembered the same way, so a
+    cancelled prompt is not asked again until :meth:`invalidate`. The same
+    object satisfies :meth:`Session.connect`'s ``password_manager`` protocol
     (``get(request)`` / ``invalidate(request)``), so one answer serves every
     host in a run.
 
-    ``prompt`` replaces the default :func:`getpass.getpass` question. It
-    receives the prompt string and returns the password, or ``None`` to abort.
+    ``prompt`` replaces the default question. It receives the prompt string
+    and returns the password, or ``None`` to abort. The default reads from
+    ``/dev/tty`` with echo turned off and restores the previous terminal mode
+    if the prompt is interrupted.
     """
 
     def __init__(self, prompt: Optional[Callable[[str], Optional[str]]] = None, password: Optional[str] = None):
+        self._lock = threading.Lock()
         if prompt is not None:
             self._prompt = prompt
         self._password = password if password else os.environ.get("TUES_PW")
+        self._have = self._password is not None
 
     @staticmethod
     def _prompt(message: str) -> Optional[str]:
-        import getpass
-
-        try:
-            return getpass.getpass(message)
-        except (EOFError, KeyboardInterrupt):
-            return None
+        with _prompt_gate:
+            return _ask_tty(message)
 
     def get(self, message: Any = None) -> Optional[str]:
         """Return the cached password, prompting when ``message`` is given.
 
         ``message`` is a string, or a :class:`tues.PasswordRequest` whose
         ``prompt`` is used. With no message and no cached password, return
-        ``None`` without prompting.
+        ``None`` without prompting. Concurrent callers share one prompt.
         """
         if message is not None and not isinstance(message, str):
             message = getattr(message, "prompt", None)
-        if message and self._password is None:
-            try:
-                self._password = self._prompt(message)
-            except KeyboardInterrupt:
-                self._password = None
-        return self._password
+        with self._lock:
+            if message and not self._have:
+                try:
+                    self._password = self._prompt(message)
+                except KeyboardInterrupt:
+                    self._password = None
+                    self._have = True
+                    raise
+                self._have = True
+            return self._password
 
     def invalidate(self, message: Any = None) -> None:
         """Forget the cached password so the next :meth:`get` asks again."""
         del message
-        self._password = None
+        with self._lock:
+            self._password = None
+            self._have = False
 
 
 _PM = PasswordManager()
@@ -857,13 +1009,19 @@ def _prepare_output_dir(path: str, strategy: str) -> None:
 
 
 def _sigint_kills(children: list):
-    """Kill remote processes started by this run when the user hits Ctrl+C."""
+    """Kill remote processes started by this run when the user hits Ctrl+C.
+
+    Also restores the terminal and unblocks a password prompt. With
+    ``pool_size > 1`` the prompt runs on a worker, so the main thread is
+    the one that sees the signal.
+    """
     if threading.current_thread() is not threading.main_thread():
         return _nullcontext()
     previous = signal.getsignal(signal.SIGINT)
 
     def handler(signum, frame):
         del signum, frame
+        _interrupt_prompt()
         for child in list(children):
             try:
                 child.kill()
@@ -953,7 +1111,8 @@ def run(
     PTY mode). ``align_prefix`` pads those labels. ``output_dir`` writes
     ``<host>.log`` per host, subject to ``output_dir_strategy``.
 
-    ``pool_size`` hosts run at a time. ``check=True`` raises
+    ``pool_size`` hosts run at a time. They share one password prompt: the
+    others wait and reuse that answer. ``check=True`` raises
     :class:`TuesTaskError` on the first non-zero exit and only works when
     ``pool_size`` is 1. ``args[0]`` is the task; ``__cause__`` is set only
     when the host failed before a status. Connection failures in a parallel
