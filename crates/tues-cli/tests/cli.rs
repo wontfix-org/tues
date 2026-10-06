@@ -1022,7 +1022,7 @@ fn missing_or_invalid_script_is_an_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("TUES_PATH is not set"), "{stderr}");
+    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
 
     let dir = script_dir("missing");
     let out = tues_bin()
@@ -1035,7 +1035,21 @@ fn missing_or_invalid_script_is_an_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("nope: not found on TUES_PATH"), "{stderr}");
+    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
+
+    let out = tues_bin()
+        .env_remove("TUES_PATH")
+        .arg("--path")
+        .arg(&dir)
+        .arg("-s")
+        .arg("nope")
+        .arg("cl")
+        .arg("h")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
 
     std::fs::write(dir.join("bad"), "# tues-args = {nope}\n").unwrap();
     let out = tues_bin()

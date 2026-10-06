@@ -3656,6 +3656,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "dirs",
  "serde_json",
  "tokio",
  "tracing",

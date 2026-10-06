@@ -67,7 +67,8 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
   -P, --prefix               Prefix output lines even on a single host
   -N, --no-prefix            Do not prefix output lines
       --prefix-format <FMT>  Line prefix template (default: [<name>/<stream>]: )
-  -s, --script <SPEC>        Run a script from TUES_PATH instead of a command
+  -s, --script <SPEC>        Run a script from --path / TUES_PATH
+      --path <DIR>           Script search directory; may be repeated
       --show-hosts           Print the hosts on stderr, then run the command
       --sort-hosts           Sort hosts alphabetically before running
   -v, --verbose...           Verbose logging

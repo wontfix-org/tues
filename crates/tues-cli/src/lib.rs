@@ -76,7 +76,10 @@ name are passed through to that provider.
 A --script file may set the provider in its header (tues-provider and
 tues-provider-args). A provider on the command line overrides that header.
 
-When TUES_PW is set, tues uses it for login and sudo passwords instead of prompting."
+When TUES_PW is set, tues uses it for login and sudo passwords instead of prompting.
+
+Scripts are looked up in `--path` directories, else `TUES_PATH`, else
+`$XDG_CONFIG_HOME/tues/scripts`."
 )]
 struct Cli {
     /// Login user (default: from ssh_config or the local user).
@@ -230,7 +233,7 @@ struct Cli {
     #[arg(long, value_name = "FORMAT", env = "TUES_PREFIX_FORMAT")]
     prefix_format: Option<String>,
 
-    /// Run a script from `TUES_PATH` instead of a remote command.
+    /// Run a script from `--path` / `TUES_PATH` instead of a remote command.
     ///
     /// `SPEC` is a shell-quoted command: the first word is the script name
     /// (looked up like `PATH`) and the rest are its arguments. Example:
@@ -245,6 +248,14 @@ struct Cli {
     /// does not. A provider after `--script` overrides both lines.
     #[arg(short = 's', long, value_name = "SPEC", env = "TUES_SCRIPT")]
     script: Option<String>,
+
+    /// Directory to search for `--script` files; may be repeated.
+    ///
+    /// When omitted, `TUES_PATH` is used if set, otherwise
+    /// `$XDG_CONFIG_HOME/tues/scripts` (defaulting `XDG_CONFIG_HOME` to
+    /// `~/.config`).
+    #[arg(long = "path", value_name = "DIR")]
+    script_path: Vec<PathBuf>,
 
     /// Verbose logging (repeat for more).
     #[arg(short = 'v', long, action = clap::ArgAction::Count, env = "TUES_VERBOSE")]
@@ -839,7 +850,7 @@ fn prepare_run(cli: &Cli) -> anyhow::Result<(Run, Option<ScriptDefaults>)> {
             None,
         ));
     };
-    let resolved = resolve_script(spec)?;
+    let resolved = resolve_script(spec, &cli.script_path)?;
     let (user, pty, prefix, prefix_format) = effective_settings(cli, &resolved.defaults);
     let defaults = resolved.defaults;
     Ok((
@@ -888,9 +899,9 @@ struct ResolvedScript {
     defaults: ScriptDefaults,
 }
 
-fn resolve_script(spec: &str) -> anyhow::Result<ResolvedScript> {
+fn resolve_script(spec: &str, script_path: &[PathBuf]) -> anyhow::Result<ResolvedScript> {
     let (name, args) = split_script_spec(spec)?;
-    let path = lookup_script(&name)?;
+    let path = lookup_script(&name, script_path)?;
     let remote_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -1005,7 +1016,7 @@ fn split_words(spec: &str) -> anyhow::Result<Vec<String>> {
     Ok(words)
 }
 
-fn lookup_script(name: &str) -> anyhow::Result<PathBuf> {
+fn lookup_script(name: &str, script_path: &[PathBuf]) -> anyhow::Result<PathBuf> {
     if name.contains('/') || name.contains('\\') {
         let path = PathBuf::from(name);
         if path.is_file() {
@@ -1013,13 +1024,42 @@ fn lookup_script(name: &str) -> anyhow::Result<PathBuf> {
         }
         anyhow::bail!("{}: not a file", path.display());
     }
-    let Some(path_var) = std::env::var_os("TUES_PATH") else {
-        anyhow::bail!("TUES_PATH is not set");
+    let dirs = script_search_dirs(script_path);
+    for dir in &dirs {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!("{name}: not found on script path")
+}
+
+/// Directories searched for `--script` names, in order.
+///
+/// `--path` wins when given. Otherwise `TUES_PATH` (PATH syntax), otherwise
+/// the legacy default `$XDG_CONFIG_HOME/tues/scripts`.
+fn script_search_dirs(script_path: &[PathBuf]) -> Vec<PathBuf> {
+    if !script_path.is_empty() {
+        return script_path.to_vec();
+    }
+    if let Some(path_var) = std::env::var_os("TUES_PATH") {
+        return std::env::split_paths(&path_var).collect();
+    }
+    default_script_dirs()
+}
+
+fn default_script_dirs() -> Vec<PathBuf> {
+    let config = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(p) => PathBuf::from(p),
+        None => dirs::home_dir()
+            .map(|h| h.join(".config"))
+            .unwrap_or_else(|| PathBuf::from(".config")),
     };
-    find_file(&path_var, name).ok_or_else(|| anyhow::anyhow!("{name}: not found on TUES_PATH"))
+    vec![config.join("tues").join("scripts")]
 }
 
 /// First regular file named `name` on a `PATH`-style list.
+#[cfg(test)]
 fn find_file(path_var: &OsStr, name: &str) -> Option<PathBuf> {
     std::env::split_paths(path_var).find_map(|dir| {
         let candidate = dir.join(name);
@@ -1812,9 +1852,10 @@ mod tests {
         let script = dir.join("tool");
         std::fs::write(&script, b"#!/bin/sh\n").unwrap();
         let spec = script.to_str().unwrap();
-        assert_eq!(super::lookup_script(spec).unwrap(), script);
+        let empty: &[std::path::PathBuf] = &[];
+        assert_eq!(super::lookup_script(spec, empty).unwrap(), script);
 
-        let resolved = super::resolve_script(&format!("{spec} arg")).unwrap();
+        let resolved = super::resolve_script(&format!("{spec} arg"), empty).unwrap();
         assert_eq!(resolved.file.src, script);
         assert_eq!(resolved.file.name, "tool");
         assert!(resolved.file.is_temporary());
@@ -1822,11 +1863,32 @@ mod tests {
         assert_eq!(resolved.defaults, super::ScriptDefaults::default());
 
         let missing = dir.join("missing");
-        let err = super::lookup_script(missing.to_str().unwrap()).unwrap_err();
+        let err = super::lookup_script(missing.to_str().unwrap(), empty).unwrap_err();
         assert!(err.to_string().ends_with("missing: not a file"), "{err}");
-        let err = super::lookup_script(dir.to_str().unwrap()).unwrap_err();
+        let err = super::lookup_script(dir.to_str().unwrap(), empty).unwrap_err();
         assert!(err.to_string().contains("not a file"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn script_path_option_is_searched_before_the_environment() {
+        let root = std::env::temp_dir().join(format!("tues-script-opt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let via_opt = root.join("opt");
+        let via_env = root.join("env");
+        std::fs::create_dir_all(&via_opt).unwrap();
+        std::fs::create_dir_all(&via_env).unwrap();
+        std::fs::write(via_opt.join("tool"), b"opt\n").unwrap();
+        std::fs::write(via_env.join("tool"), b"env\n").unwrap();
+        let previous = std::env::var_os("TUES_PATH");
+        unsafe { std::env::set_var("TUES_PATH", &via_env) };
+        let found = super::lookup_script("tool", &[via_opt.clone()]).unwrap();
+        assert_eq!(found, via_opt.join("tool"));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TUES_PATH", value) },
+            None => unsafe { std::env::remove_var("TUES_PATH") },
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
