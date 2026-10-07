@@ -8,7 +8,7 @@ import pytest
 
 import tues
 
-from conftest import NOPASSWD_USER, PASSWORD, USER
+from conftest import NOPASSWD_USER, PASSWORD, USER, require_sudo
 
 
 @pytest.fixture
@@ -49,10 +49,11 @@ def test_user_shell_uses_the_login_shell(sshd):
     with tues.Session(f"{USER}@{sshd.host}", **sshd.connect_kwargs(user_shell=True)) as s:
         out = s.run("cat <<<foo", shell=True, capture_output=True, text=True)
         assert out.returncode == 0 and out.stdout == "foo\n"
-        out = s.run("cat <<<foo", shell=True, user="root", capture_output=True, text=True)
-        assert out.returncode == 0 and out.stdout == "foo\n"
         out = s.run("cat <<<foo", shell=True, executable="sh", capture_output=True, text=True)
         assert out.returncode != 0
+        require_sudo(sshd)
+        out = s.run("cat <<<foo", shell=True, user="root", capture_output=True, text=True)
+        assert out.returncode == 0 and out.stdout == "foo\n"
 
 
 def test_run_shell(session):
@@ -174,19 +175,22 @@ def test_timeout(session):
     assert e.stdout == b"partial\n"
 
 
-def test_sudo_with_static_password(session):
+def test_sudo_with_static_password(session, sshd):
+    require_sudo(sshd)
     out = session.run(["id", "-un"], user="root", capture_output=True, check=True)
     assert out.stdout == b"root\n"
     assert out.stderr == b""
 
 
-def test_sudo_binary_stdout_is_untouched(session):
+def test_sudo_binary_stdout_is_untouched(session, sshd):
+    require_sudo(sshd)
     data = os.urandom(300_000) + b"[tues-sudo-x] Sorry, try again.\n" + PASSWORD.encode()
     out = session.run(["cat"], input=data, user="root", stdout=tues.PIPE, check=True)
     assert out.stdout == data
 
 
-def test_sudo_pty(session):
+def test_sudo_pty(session, sshd):
+    require_sudo(sshd)
     out = session.run(["id", "-un"], user="root", pty=True, capture_output=True, check=True)
     assert b"root" in out.stdout
     assert b"tues-sudo" not in out.stdout
@@ -194,6 +198,7 @@ def test_sudo_pty(session):
 
 
 def test_sudo_nopasswd_user_without_password(sshd):
+    require_sudo(sshd)
     with tues.Session(f"{USER}@{sshd.host}", **sshd.connect_kwargs(password=None)) as s:
         out = s.run(["id", "-un"], user=NOPASSWD_USER, capture_output=True, check=True)
         assert out.stdout == NOPASSWD_USER.encode() + b"\n"
@@ -202,6 +207,7 @@ def test_sudo_nopasswd_user_without_password(sshd):
 
 
 def test_session_default_user(sshd):
+    require_sudo(sshd)
     with tues.Session(f"{USER}@{sshd.host}", **sshd.connect_kwargs(user="root")) as s:
         assert s.user == "root"
         assert s.check_output(["id", "-un"]) == b"root\n"
@@ -218,6 +224,7 @@ def test_session_default_user(sshd):
 
 
 def test_password_prompter_is_memoized(sshd):
+    require_sudo(sshd)
     calls = []
 
     def prompter(req):
@@ -232,6 +239,8 @@ def test_password_prompter_is_memoized(sshd):
 
 
 def test_wrong_password_is_invalidated_and_retried(sshd):
+    require_sudo(sshd)
+
     class Manager:
         def __init__(self):
             self.answers = ["wrong", PASSWORD]
@@ -250,6 +259,7 @@ def test_wrong_password_is_invalidated_and_retried(sshd):
 
 
 def test_always_wrong_password_fails(sshd):
+    require_sudo(sshd)
     with tues.Session(f"{USER}@{sshd.host}", **sshd.connect_kwargs(password=None, password_manager=lambda r: "nope")) as s:
         with pytest.raises(tues.SudoError, match="after 3 attempt"):
             s.run(["id"], user="root", capture_output=True)
@@ -304,7 +314,8 @@ def test_popen_unbuffered(session):
         p.stdin.close()
 
 
-def test_popen_communicate(session):
+def test_popen_communicate(session, sshd):
+    require_sudo(sshd)
     p = session.Popen("tr a-z A-Z; echo done >&2", shell=True, user="root", stdin=tues.PIPE, stdout=tues.PIPE, stderr=tues.PIPE)
     out, err = p.communicate(b"shout")
     assert out == b"SHOUT"

@@ -7,7 +7,7 @@ import pytest
 
 import tues
 
-from conftest import PASSWORD, USER
+from conftest import PASSWORD, USER, require_sudo
 
 
 def run(coro):
@@ -41,6 +41,7 @@ def test_run_and_properties(sshd):
             out = await s.run("echo hello; exit 2", shell=True, capture_output=True)
             assert isinstance(out, tues.CompletedProcess)
             assert out.stdout == b"hello\n" and out.stderr == b"" and out.returncode == 2
+            require_sudo(sshd)
             out = await s.run(["id", "-un"], user="root", stdout=tues.PIPE, check=True)
             assert out.stdout == b"root\n" and out.stderr is None
             out = await s.run("printf 'a\\r\\nb'; echo e >&2", shell=True, capture_output=True, text=True)
@@ -60,6 +61,8 @@ def test_run_and_properties(sshd):
 
 
 def test_session_default_user(sshd):
+    require_sudo(sshd)
+
     async def main():
         async with await connect(sshd, user="root") as s:
             assert s.user == "root"
@@ -107,6 +110,8 @@ def test_run_timeout(sshd):
 
 
 def test_concurrent_sudo_commands(sshd):
+    require_sudo(sshd)
+
     async def main():
         calls = []
 
@@ -124,6 +129,8 @@ def test_concurrent_sudo_commands(sshd):
 
 
 def test_binary_input_through_sudo(sshd):
+    require_sudo(sshd)
+
     async def main():
         async with await connect(sshd) as s:
             data = os.urandom(200_000) + b"[tues-ok-abc]"
@@ -186,6 +193,8 @@ def test_large_output_flow_control(sshd):
 
 
 def test_communicate_and_signals(sshd):
+    require_sudo(sshd)
+
     async def main():
         async with await connect(sshd) as s:
             proc = await s.create_subprocess_shell("tr a-z A-Z", user="root", stdin=tues.PIPE, stdout=tues.PIPE, stderr=tues.PIPE)

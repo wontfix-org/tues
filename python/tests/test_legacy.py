@@ -16,7 +16,7 @@ import pytest
 
 import tues
 
-from conftest import NOPASSWD_USER, PASSWORD, USER
+from conftest import NOPASSWD_USER, PASSWORD, USER, require_sudo
 
 
 def _opts(sshd, **extra):
@@ -401,6 +401,7 @@ def test_run_here_string(sshd):
     )
     assert task.returncode == 0
     assert task.stdout == "foo\n"
+    require_sudo(sshd)
     task = tues.run(
         sshd.host,
         "cat <<<foo",
@@ -429,6 +430,7 @@ def test_run_text_and_argv(sshd):
 
 
 def test_run_sudo_and_prefix(sshd):
+    require_sudo(sshd)
     task = tues.run(
         sshd.host,
         "printf %s foo",
@@ -457,6 +459,7 @@ def test_run_pty_merges_stderr(sshd):
 
 
 def test_run_sudo_without_password_prompt(sshd):
+    require_sudo(sshd)
     task = tues.run(
         sshd.host,
         "id -un",
@@ -579,6 +582,7 @@ def test_run_env_cwd_and_files(sshd, tmp_path):
     local = tmp_path / "payload"
     local.write_text("payload")
     os.chmod(local, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+    require_sudo(sshd)
     task = tues.run(
         sshd.host,
         "cat \"$TUES_FILE1\"",
@@ -615,6 +619,7 @@ def test_run_connect_failure_is_task_error(sshd):
 
 
 def test_run_refused_password_aborts(sshd):
+    require_sudo(sshd)
     with pytest.raises(tues.TuesUserAbort, match="Sudo authorization failed"):
         tues.run(
             sshd.host,
@@ -625,6 +630,7 @@ def test_run_refused_password_aborts(sshd):
 
 
 def test_run_rejected_sudo_password_is_a_task_status(sshd):
+    require_sudo(sshd)
     opts = _opts(sshd, password=None, password_manager=lambda request: "nope")
     task = tues.run(sshd.host, "id", user="root", capture_output=True, connect_options=opts)
     assert task.returncode not in (None, 0)
@@ -655,6 +661,7 @@ def test_run_check_raises_task_error(sshd):
 
 
 def test_run_pool_asks_for_the_password_once(sshd):
+    require_sudo(sshd)
     started = threading.Event()
     release = threading.Event()
     calls = []
@@ -762,6 +769,7 @@ def test_script_runs_on_the_host(sshd, tmp_path):
 
 
 def test_script_provider_and_user(sshd, tmp_path):
+    require_sudo(sshd)
     path = tmp_path / "myscript"
     path.write_text(
         "#!/bin/sh\n"
