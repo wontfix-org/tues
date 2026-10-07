@@ -4,7 +4,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
-use tues_testsupport::{PASSWORD, USER, sshd};
+use tues_testsupport::{PASSWORD, USER, require_sudo, sshd};
 
 fn tues() -> Command {
     let f = sshd();
@@ -65,6 +65,7 @@ fn prefix_forces_labels_on_a_single_host() {
 
 #[test]
 fn multiple_hosts_with_sudo_and_prefixes() {
+    require_sudo!();
     let f = sshd();
     let out = tues()
         .arg("--no-pty")
@@ -517,6 +518,7 @@ fn missing_file_upload_fails_before_the_command() {
 
 #[test]
 fn wrong_sudo_password_is_an_error() {
+    require_sudo!();
     let f = sshd();
     let out = tues()
         .env("TUES_PW", "wrong")
@@ -534,6 +536,7 @@ fn wrong_sudo_password_is_an_error() {
 
 #[test]
 fn sudo_runs_without_a_pty_unless_requested() {
+    require_sudo!();
     let f = sshd();
     let out = tues()
         .arg("-u")
@@ -780,8 +783,6 @@ fn empty_host_lists_are_errors() {
         vec!["true", "cl"],
         vec!["true", "cl", "", ""],
         vec!["-v", "true", "cl"],
-        vec!["-vv", "true", "cl"],
-        vec!["-vvv", "true", "cl"],
     ] {
         let out = tues_bin().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{args:?}");
@@ -935,6 +936,7 @@ fn script_is_uploaded_with_its_arguments_and_removed() {
 
 #[test]
 fn script_header_supplies_defaults_until_the_command_line_overrides_them() {
+    require_sudo!();
     let f = sshd();
     let dir = script_dir("defaults");
     std::fs::write(

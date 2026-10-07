@@ -7,7 +7,7 @@ use tues_core::{
     CommandUser, Error, OpenOptions, PtyConfig, StaticPasswordManager, Stdio, SudoError, shared,
 };
 use tues_sync::Session;
-use tues_testsupport::{PASSWORD, USER, sshd};
+use tues_testsupport::{PASSWORD, USER, require_sudo, sshd};
 
 fn connect() -> Session {
     Session::connect(sshd().connect_options()).expect("connect")
@@ -39,6 +39,7 @@ fn stdio_pipes_are_blocking_readers_and_writers() {
 
 #[test]
 fn sudo_conversation_is_hidden_and_stdin_is_gated() {
+    require_sudo!();
     let s = connect();
     let mut child = s.command("cat").user("root").spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
@@ -55,6 +56,7 @@ fn sudo_conversation_is_hidden_and_stdin_is_gated() {
 
 #[test]
 fn sudo_with_pty_sync() {
+    require_sudo!();
     let s = connect();
     let out = s
         .command("id")
@@ -68,6 +70,7 @@ fn sudo_with_pty_sync() {
 
 #[test]
 fn sudo_failure_is_reported() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("bad")));
     let s = Session::connect(o).unwrap();
@@ -205,6 +208,7 @@ fn sftp_blocking_file_io() {
 
 #[test]
 fn sessions_are_usable_from_multiple_threads() {
+    require_sudo!();
     let s = connect();
     let handles: Vec<_> = (0..4)
         .map(|i| {

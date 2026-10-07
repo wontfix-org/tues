@@ -12,7 +12,7 @@ use tues_core::{
     PtyConfig, SecretString, SshConfig, SshConfigSource, StaticPasswordManager, Stdio, SudoError,
     shared,
 };
-use tues_testsupport::{NOPASSWD_USER, PASSWORD, USER, sshd};
+use tues_testsupport::{NOPASSWD_USER, PASSWORD, USER, require_sudo, sshd};
 
 async fn connect() -> Session {
     Session::connect(sshd().connect_options())
@@ -86,6 +86,7 @@ async fn here_string_needs_a_shell_that_understands_it() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout, b"foo\n", "stderr={}", out.stderr_lossy());
 
+    require_sudo!();
     let out = s
         .shell("cat <<<foo")
         .shell_program("bash")
@@ -105,10 +106,6 @@ async fn user_shell_uses_the_login_shell() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(out.stdout, b"foo\n", "stderr={}", out.stderr_lossy());
 
-    let out = s.shell("cat <<<foo").user("root").output().await.unwrap();
-    assert!(out.status.success(), "sudo {out:?}");
-    assert_eq!(out.stdout, b"foo\n", "sudo stderr={}", out.stderr_lossy());
-
     let out = s
         .shell("cat <<<foo")
         .shell_program("sh")
@@ -119,6 +116,11 @@ async fn user_shell_uses_the_login_shell() {
         !out.status.success(),
         "an explicit shell wins over the login shell: {out:?}"
     );
+
+    require_sudo!();
+    let out = s.shell("cat <<<foo").user("root").output().await.unwrap();
+    assert!(out.status.success(), "sudo {out:?}");
+    assert_eq!(out.stdout, b"foo\n", "sudo stderr={}", out.stderr_lossy());
 }
 
 #[tokio::test]
@@ -166,6 +168,7 @@ async fn large_binary_roundtrip() {
 
 #[tokio::test]
 async fn sudo_with_password_removes_conversation() {
+    require_sudo!();
     let s = connect().await;
     let out = s
         .command("id")
@@ -181,6 +184,7 @@ async fn sudo_with_password_removes_conversation() {
 
 #[tokio::test]
 async fn sudo_binary_stdout_containing_nonces_is_intact() {
+    require_sudo!();
     let s = connect().await;
     // Generate a payload that includes the literal prompt/marker prefixes and
     // the password, plus every byte value.
@@ -205,6 +209,7 @@ async fn sudo_binary_stdout_containing_nonces_is_intact() {
 
 #[tokio::test]
 async fn sudo_stdin_is_delivered_after_password() {
+    require_sudo!();
     let s = connect().await;
     let mut child = s.command("cat").user("root").spawn().await.unwrap();
     let mut stdin = child.stdin.take().unwrap();
@@ -236,6 +241,7 @@ impl tues_core::PasswordPrompter for FlakyPrompter {
 
 #[tokio::test]
 async fn sudo_wrong_password_is_invalidated_and_retried() {
+    require_sudo!();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let pm = shared(MemoizingPasswordManager::new(FlakyPrompter {
         calls: calls.clone(),
@@ -273,6 +279,7 @@ async fn sudo_wrong_password_is_invalidated_and_retried() {
 
 #[tokio::test]
 async fn sudo_always_wrong_password_reports_auth_failed() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("definitely-wrong")));
     let s = Session::connect(o).await.unwrap();
@@ -298,6 +305,7 @@ impl PasswordManager for NoPassword {
 
 #[tokio::test]
 async fn sudo_without_password_manager_fails_cleanly() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
@@ -315,6 +323,7 @@ async fn sudo_without_password_manager_fails_cleanly() {
 
 #[tokio::test]
 async fn sudo_nopasswd_target_needs_no_prompt() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(NoPassword));
     let s = Session::connect(o).await.unwrap();
@@ -331,6 +340,7 @@ async fn sudo_nopasswd_target_needs_no_prompt() {
 
 #[tokio::test]
 async fn sudo_with_pty() {
+    require_sudo!();
     let s = connect().await;
     let out = s
         .shell("id -un; tty >/dev/null && echo has-tty")
@@ -358,6 +368,7 @@ async fn pty_without_sudo() {
 
 #[tokio::test]
 async fn session_default_user_and_override() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.user = Some("root".into());
     let s = Session::connect(o).await.unwrap();
@@ -425,6 +436,7 @@ async fn wait_is_cancel_safe() {
 
 #[tokio::test]
 async fn failed_child_keeps_reporting_its_error() {
+    require_sudo!();
     let mut o = sshd().connect_options();
     o.password_manager = Some(shared(StaticPasswordManager::new("definitely-wrong")));
     let s = Session::connect(o).await.unwrap();
@@ -453,6 +465,7 @@ async fn status_with_null_stdio() {
 
 #[tokio::test]
 async fn sftp_as_session_user_uses_sudo() {
+    require_sudo!();
     // `tues` cannot create files in another user's home. Both targets succeed
     // only because the SFTP server itself runs as that user.
     for (user, path) in [
@@ -540,6 +553,7 @@ async fn session_file_helpers_use_their_own_channel() {
     let _ = std::fs::remove_dir_all(&local);
     let _ = std::fs::remove_dir_all(&downloaded);
 
+    require_sudo!();
     let mut opts = sshd().connect_options();
     opts.user = Some(NOPASSWD_USER.into());
     let s = Session::connect(opts).await.unwrap();
@@ -711,6 +725,7 @@ async fn proxy_jump_through_second_container() {
     let out = s.command("hostname").output().await.unwrap();
     assert!(out.status.success(), "{out:?}");
     // Sudo still works through the jump.
+    require_sudo!();
     let out = s
         .command("id")
         .arg("-un")
@@ -723,6 +738,7 @@ async fn proxy_jump_through_second_container() {
 
 #[tokio::test]
 async fn concurrent_commands_on_one_session() {
+    require_sudo!();
     let s = connect().await;
     let mut handles = Vec::new();
     for i in 0..8 {

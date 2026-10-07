@@ -104,6 +104,37 @@ test:
     .venv/bin/python -m coverage combine --quiet
     .venv/bin/python -m coverage report --include='*/python/tues/*'
 
+# Run Rust (nightly) and Python tests in fail-fast mode.
+test-fail-fast:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    if ! rustup toolchain list | rg -q '^nightly'; then
+        echo "nightly toolchain is required: rustup toolchain install nightly" >&2
+        exit 1
+    fi
+    if [[ ! -x .venv/bin/python ]]; then
+        echo "create .venv first (just setup)" >&2
+        exit 1
+    fi
+    # region agent log H1,H2
+    python3 -c 'import json,time,pathlib; p=pathlib.Path(".cursor/debug-26b7ec.log"); p.parent.mkdir(parents=True, exist_ok=True); p.open("a", encoding="utf-8").write(json.dumps({"sessionId":"26b7ec","runId":"pre-fix","hypothesisId":"H1","location":"justfile:test-fail-fast","message":"starting fail-fast suite","data":{"rust_fail_fast":True,"rust_single_thread":True,"rust_single_job":True,"rust_per_package_loop":True,"pytest_fail_fast":True},"timestamp":int(time.time()*1000)})+"\n")'
+    # endregion agent log H1,H2
+    mapfile -t rust_packages < <(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); m=set(d["workspace_members"]); p={x["id"]:x["name"] for x in d["packages"]}; [print(p[i]) for i in d["workspace_members"] if i in m]')
+    for pkg in "${rust_packages[@]}"; do
+        # region agent log H5
+        python3 -c 'import json,time,pathlib,sys; p=pathlib.Path(".cursor/debug-26b7ec.log"); p.open("a", encoding="utf-8").write(json.dumps({"sessionId":"26b7ec","runId":"pre-fix","hypothesisId":"H5","location":"justfile:test-fail-fast","message":"starting rust package","data":{"package":sys.argv[1]},"timestamp":int(time.time()*1000)})+"\n")' "$pkg"
+        # endregion agent log H5
+        cargo +nightly test -j 1 -Z unstable-options -p "$pkg" -- -Z unstable-options --fail-fast --test-threads=1
+    done
+    # region agent log H3
+    python3 -c 'import json,time,pathlib; p=pathlib.Path(".cursor/debug-26b7ec.log"); p.open("a", encoding="utf-8").write(json.dumps({"sessionId":"26b7ec","runId":"pre-fix","hypothesisId":"H3","location":"justfile:test-fail-fast","message":"rust phase passed","data":{"mode":"per-package sequential"},"timestamp":int(time.time()*1000)})+"\n")'
+    # endregion agent log H3
+    .venv/bin/python -m pytest -x
+    # region agent log H4
+    python3 -c 'import json,time,pathlib; p=pathlib.Path(".cursor/debug-26b7ec.log"); p.open("a", encoding="utf-8").write(json.dumps({"sessionId":"26b7ec","runId":"pre-fix","hypothesisId":"H4","location":"justfile:test-fail-fast","message":"python phase passed","data":{"command":"python -m pytest -x"},"timestamp":int(time.time()*1000)})+"\n")'
+    # endregion agent log H4
+
 # Tag and build the next release candidate (omit version to be prompted).
 rc *args:
     "{{justfile_directory()}}/scripts/release" --rc {{args}}
