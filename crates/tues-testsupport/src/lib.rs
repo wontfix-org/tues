@@ -38,6 +38,12 @@ pub struct SshdFixture {
     pub target_name: String,
     /// Absolute path of the fixture private key authorised for [`USER`].
     pub key_path: PathBuf,
+    /// Whether processes inside the fixture containers can use `sudo`.
+    ///
+    /// False when the engine inherited `NoNewPrivs` (e.g. dockerd under
+    /// bubblewrap), which blocks setuid/`sudo` and cannot be cleared per
+    /// container.
+    pub sudo_available: bool,
 }
 
 impl SshdFixture {
@@ -90,6 +96,28 @@ fn docker_dir() -> PathBuf {
 }
 
 static FIXTURE: OnceLock<SshdFixture> = OnceLock::new();
+
+/// Whether fixture containers can elevate with `sudo` (`NoNewPrivs` unset).
+pub fn sudo_available() -> bool {
+    sshd().sudo_available
+}
+
+/// Skip the enclosing test when in-container `sudo` cannot elevate.
+///
+/// Use at the start of tests (or before sudo-only sections) that need
+/// successful privilege escalation inside the fixture containers.
+#[macro_export]
+macro_rules! require_sudo {
+    () => {
+        if !$crate::sudo_available() {
+            eprintln!(
+                "skipping {}: in-container sudo unavailable (NoNewPrivs is set)",
+                module_path!()
+            );
+            return;
+        }
+    };
+}
 
 /// Start (once) and return the shared fixture.
 pub fn sshd() -> &'static SshdFixture {
@@ -163,14 +191,56 @@ async fn start() -> Result<(SshdFixture, Keep), String> {
             .with_startup_timeout(Duration::from_secs(120))
     };
 
-    let target = base(&target_name)
-        .start()
-        .await
-        .map_err(|e| format!("start target: {e}"))?;
-    let jump = base(&jump_name)
-        .start()
-        .await
-        .map_err(|e| format!("start jump: {e}"))?;
+    let target = {
+        let mut last_err = String::new();
+        let mut started = None;
+        for attempt in 1..=5 {
+            match base(&target_name).start().await {
+                Ok(container) => {
+                    started = Some(container);
+                    break;
+                }
+                Err(err) => {
+                    last_err = err.to_string();
+                    let port_collision = last_err.contains("address already in use")
+                        || last_err.contains("port is already allocated");
+                    if port_collision && attempt < 5 {
+                        // The failed attempt may have left a partial container.
+                        let _ = docker(&["rm", "-f", &target_name]);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        started.ok_or_else(|| format!("start target: {last_err}"))?
+    };
+    let jump = {
+        let mut last_err = String::new();
+        let mut started = None;
+        for attempt in 1..=5 {
+            match base(&jump_name).start().await {
+                Ok(container) => {
+                    started = Some(container);
+                    break;
+                }
+                Err(err) => {
+                    last_err = err.to_string();
+                    let port_collision = last_err.contains("address already in use")
+                        || last_err.contains("port is already allocated");
+                    if port_collision && attempt < 5 {
+                        // The failed attempt may have left a partial container.
+                        let _ = docker(&["rm", "-f", &jump_name]);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        started.ok_or_else(|| format!("start jump: {last_err}"))?
+    };
 
     let port = target
         .get_host_port_ipv4(22.tcp())
@@ -181,12 +251,21 @@ async fn start() -> Result<(SshdFixture, Keep), String> {
         .await
         .map_err(|e| format!("jump port: {e}"))?;
 
+    let sudo_available = probe_sudo_available(&target_name);
+    if !sudo_available {
+        eprintln!(
+            "tues-testsupport: fixture containers have NoNewPrivs set; \
+             sudo-dependent tests will be skipped"
+        );
+    }
+
     let fixture = SshdFixture {
         host: "127.0.0.1".to_string(),
         port,
         jump_port,
         target_name,
         key_path,
+        sudo_available,
     };
     let keep: Keep = vec![
         Arc::new(Mutex::new(Box::new(target))),
@@ -292,4 +371,18 @@ fn nonce() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{:x}", t & 0xffff_ffff)
+}
+
+/// True when PID 1 in ``container`` has ``NoNewPrivs: 0``.
+fn probe_sudo_available(container: &str) -> bool {
+    let Some(status) = docker(&["exec", container, "cat", "/proc/1/status"]) else {
+        return false;
+    };
+    for line in status.lines() {
+        let Some(value) = line.strip_prefix("NoNewPrivs:") else {
+            continue;
+        };
+        return value.trim() == "0";
+    }
+    false
 }
