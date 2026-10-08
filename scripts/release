@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """Set the workspace version, tag it, and build PyPI artifacts.
 
-Usage: scripts/release [-d|--dry-run] [--rc]
+Usage: scripts/release [-d|--dry-run] [--rc | --pre]
                        [--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). When omitted and stdin is a TTY, the script prints commit
 summaries since the last release and prompts for a version. The script
 commits the version bump, creates an annotated tag vVERSION, and writes a
-release sdist plus one wheel per configured CPython to dist/<version>/. It
-does not push the tag. dist/latest points at the version just built.
-dist/stable points at the newest tagged final release and is left alone for
-a --rc build.
+release sdist plus one wheel per configured CPython to dist/<version>/.
+dist/latest points at the version just built. dist/stable points at the
+newest tagged final release and is left alone for a --rc build.
+
+A release or release candidate is allowed only on a release branch (main or
+master). A final release then pushes that branch and the tag to the branch's
+upstream. An --rc build does not push.
+
+--pre builds a Python developmental pre-release from any branch. Cargo stores
+``X.Y.Z-dev0+<shortsha>.<utc-timestamp>.<user>``, which PEP 440 spells
+``X.Y.Z.dev0+<shortsha>.<utc-timestamp>.<user>``. It is committed and tagged,
+and it is not pushed. pip and uv install it only for that exact version or
+when ``--pre`` is given.
 
 Unless --dry-run is set, the built artifacts are published with
 ``uv publish`` (using uv's configured index and credentials).
@@ -34,11 +43,13 @@ rather than for the host glibc. Docker is required.
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -47,6 +58,8 @@ CARGO_TOML = ROOT / "Cargo.toml"
 DIST = ROOT / "dist"
 
 DEFAULT_PYTHONS = ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+# Releases and release candidates are cut only from these branches.
+RELEASE_BRANCHES = ("main", "master")
 # manylinux2014 image: maturin, stable Rust, and CPython 3.9–3.14 on PATH.
 IMAGE = "ghcr.io/pyo3/maturin:v1.15.0"
 # Path dependencies in Cargo.toml that pin the workspace version.
@@ -61,6 +74,12 @@ RC_INPUT_RE = re.compile(
     r"^(?P<base>[0-9]+\.[0-9]+\.[0-9]+)(?:-rc\.|-rc|rc)(?P<n>[0-9]+)$"
 )
 RC_CARGO_RE = re.compile(r"^(?P<base>[0-9]+\.[0-9]+\.[0-9]+)-rc\.(?P<n>[0-9]+)$")
+# Cargo stores ``0.3.0-dev0+abc1234.20261008120000.mvb``. PEP 440 spells that
+# ``0.3.0.dev0+abc1234.20261008120000.mvb``, a developmental pre-release.
+PRE_CARGO_RE = re.compile(
+    r"^(?P<base>[0-9]+\.[0-9]+\.[0-9]+)-dev0\+"
+    r"(?P<local>[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)$"
+)
 PYTHON_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 
 
@@ -78,7 +97,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts/release",
         usage=(
-            "scripts/release [-d|--dry-run] [--rc] "
+            "scripts/release [-d|--dry-run] [--rc | --pre] "
             "[--python 3.9,3.10,3.11,3.12,3.13,3.14] [VERSION]"
         ),
         description="Set the workspace version, tag it, and build PyPI artifacts.",
@@ -98,6 +117,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pre",
+        action="store_true",
+        help=(
+            "commit and tag a Python pre-release from any branch "
+            "(0.3.0 -> 0.3.0-dev0+<sha>.<timestamp>.<user>, not pushed)"
+        ),
+    )
+    parser.add_argument(
         "--python",
         metavar="VERSIONS",
         help="CPython releases to build wheels for (comma or space separated)",
@@ -106,7 +133,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "version",
         metavar="VERSION",
         nargs="?",
-        help="release version, e.g. 0.2.0 (prompted when omitted on a TTY)",
+        help=(
+            "release version, e.g. 0.2.0 (prompted when omitted on a TTY; "
+            "--pre defaults to the current release)"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -175,11 +205,50 @@ def published_version(cargo_version: str) -> str:
     """The PEP 440 spelling of a version stored for Cargo.
 
     ``0.3.0-rc.1`` is the pre-release ``0.3.0rc1``.
+    ``0.3.0-dev0+abc.20261008120000.mvb`` is ``0.3.0.dev0+abc.20261008120000.mvb``.
     """
     match = RC_CARGO_RE.match(cargo_version)
     if match:
         return f"{match.group('base')}rc{match.group('n')}"
+    match = PRE_CARGO_RE.match(cargo_version)
+    if match:
+        return f"{match.group('base')}.dev0+{match.group('local')}"
     return cargo_version
+
+
+def release_base(version: str) -> str:
+    """The ``X.Y.Z`` release inside a workspace version."""
+    if PLAIN_VERSION_RE.match(version):
+        return version
+    match = RC_CARGO_RE.match(version) or PRE_CARGO_RE.match(version)
+    if match:
+        return match.group("base")
+    head = re.split(r"[-+]", version, maxsplit=1)[0]
+    if PLAIN_VERSION_RE.match(head):
+        return head
+    raise ReleaseError(f"not a release version: {version}", code=2)
+
+
+def version_user() -> str:
+    """Login name, reduced to the characters a PEP 440 local segment allows."""
+    raw = getpass.getuser()
+    cleaned = re.sub(r"[^0-9A-Za-z]", "", raw).lower()
+    if not cleaned:
+        raise ReleaseError(f"username {raw!r} cannot be used in a version", code=2)
+    return cleaned
+
+
+def cargo_pre_version(base: str) -> str:
+    """SemVer spelling of a developmental pre-release of ``base``.
+
+    The local part is the short commit hash, a UTC timestamp, and the
+    username, in that order. PEP 440 spells the result ``{base}.dev0+...``.
+    """
+    sha = git("rev-parse", "--short", "HEAD", capture=True).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]+", sha):
+        raise ReleaseError(f"refusing commit hash {sha!r}", code=2)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"{base}-dev0+{sha}.{stamp}.{version_user()}"
 
 
 def parse_rc_request(text: str) -> tuple[str, Optional[int]]:
@@ -223,6 +292,39 @@ def next_rc_number(base: str) -> int:
 
 def restore_manifests() -> None:
     git("checkout", "--", "Cargo.toml", "Cargo.lock")
+
+
+def current_branch() -> str:
+    """The branch HEAD is on, or ``HEAD`` when detached."""
+    return git("rev-parse", "--abbrev-ref", "HEAD", capture=True).stdout.strip()
+
+
+def require_upstream(branch: str) -> None:
+    """Refuse a final release whose branch has no tracking upstream."""
+    result = git(
+        "rev-parse",
+        "--abbrev-ref",
+        "@{upstream}",
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ReleaseError(
+            f"{branch} has no upstream; set one before releasing",
+            code=2,
+        )
+
+
+def require_release_branch() -> str:
+    """Refuse a release or release candidate that is not cut from a release branch."""
+    branch = current_branch()
+    if branch not in RELEASE_BRANCHES:
+        allowed = " or ".join(RELEASE_BRANCHES)
+        raise ReleaseError(
+            f"a release can only be created from {allowed}, not {branch}",
+            code=2,
+        )
+    return branch
 
 
 def tag_exists(tag: str) -> bool:
@@ -455,14 +557,28 @@ def main(argv: Sequence[str]) -> int:
         if not PYTHON_RE.match(py):
             raise ReleaseError(f"not a Python version: {py}", code=2)
 
+    if args.rc and args.pre:
+        raise ReleaseError("--rc and --pre cannot be combined", code=2)
+
     given = args.version
-    if given is None:
+    if given is None and not args.pre:
         given = prompt_version(candidate=args.rc)
-    given = given[1:] if given.startswith("v") else given
+    if given is not None:
+        given = given[1:] if given.startswith("v") else given
 
     current = workspace_version()
     candidate = False
-    if args.rc:
+    prerelease = False
+    if args.pre:
+        base = given if given is not None else release_base(current)
+        if not PLAIN_VERSION_RE.match(base):
+            raise ReleaseError(
+                f"a pre-release is built from a release such as 0.3.0, not {base}",
+                code=2,
+            )
+        version = cargo_pre_version(base)
+        prerelease = True
+    elif args.rc:
         base, number = parse_rc_request(given)
         if number is None:
             number = next_rc_number(base)
@@ -474,6 +590,12 @@ def main(argv: Sequence[str]) -> int:
         version = given
         candidate = RC_CARGO_RE.match(version) is not None
     tag = f"v{version}"
+    if prerelease:
+        branch = current_branch()
+    else:
+        branch = require_release_branch()
+        if not candidate:
+            require_upstream(branch)
 
     if git("status", "--porcelain", capture=True).stdout.strip():
         if not args.dry_run:
@@ -506,7 +628,15 @@ def main(argv: Sequence[str]) -> int:
         else:
             print(f"tag {tag} already exists")
         print(wheels)
-        if candidate:
+        if prerelease:
+            print(f"would point dist/latest at {public}")
+            print("would leave dist/stable and dist/rc unchanged")
+            print(f"would not push {branch} or {tag}")
+            print(
+                f"{public} is a pre-release: pip and uv install it only for "
+                f"tues=={public} or when --pre is given"
+            )
+        elif candidate:
             print(f"would point dist/latest and dist/rc at {public}")
             print("would leave dist/stable unchanged")
             print(
@@ -515,6 +645,7 @@ def main(argv: Sequence[str]) -> int:
             )
         else:
             print(f"would point dist/latest and dist/stable at {public}")
+            print(f"would push {branch} and {tag} to its upstream")
         print(f"would upload dist/{public}/* with uv publish")
         return 0
 
@@ -535,20 +666,28 @@ def main(argv: Sequence[str]) -> int:
         print(f"tagged {tag}")
 
     out = build(pythons, public)
-    publish(public, stable=not candidate, candidate=candidate)
+    publish(public, stable=not candidate and not prerelease, candidate=candidate)
 
     show_artifacts(out)
     print()
     print(f"dist/latest -> {public}")
-    if candidate:
+    if prerelease:
+        print("dist/stable and dist/rc are unchanged")
+    elif candidate:
         print(f"dist/rc -> {public}")
     else:
         print(f"dist/stable -> {public}")
     print()
-    print("The tag is local. Publish it with:")
-    print(f"  git push origin HEAD {tag}")
+    if prerelease:
+        print(f"{branch} and {tag} are not pushed")
+    elif candidate:
+        print("The tag is local. Publish it with:")
+        print("  git push --follow-tags")
+    else:
+        git("push", "--follow-tags")
+        print(f"pushed {branch} and {tag}")
     print()
-    if candidate:
+    if prerelease or candidate:
         print(
             f"{public} is a pre-release. pip and uv will not install it unless "
             f"the version is requested (tues=={public}) or --pre is given."

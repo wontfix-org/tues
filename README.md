@@ -638,13 +638,14 @@ there), commits it, and tags `v<version>`. It then builds an sdist and one
 wheel per CPython into `dist/<version>/` for an internal index. Each wheel
 carries the extension module and the `tues` console script. Older version
 directories are left in place. `dist/latest` points at the version just
-built, and `dist/stable` points at the newest tagged final release. The tag
-is not pushed. Unless `--dry-run` is set, the artifacts are published with
+built, and `dist/stable` points at the newest tagged final release. A release
+or release candidate is created only from `main` or `master`. A final release
+pushes that branch and the `v<version>` tag to the branch's upstream. A release
+candidate is not pushed. Unless `--dry-run` is set, the artifacts are published with
 `uv publish` (uv's configured index and credentials).
 
 ```sh
 just release 0.2.0
-git push origin HEAD v0.2.0
 ```
 
 `just release` calls `scripts/release`. When the version is omitted on a TTY,
@@ -683,8 +684,22 @@ and tagged (`v0.3.0-rc.1`). `dist/latest` and `dist/rc` point at it;
 `dist/stable` stays on the last final release.
 
 ```sh
-git push origin HEAD v0.3.0-rc.1
+git push --follow-tags
 ```
+
+`just pre` builds a developmental pre-release from any branch. The version
+carries the short commit hash, a UTC timestamp, and the login name:
+
+```sh
+just pre
+# Cargo.toml 4.0.5-dev0+abcdef1.20261008120000.mvb
+# wheels named 4.0.5.dev0+abcdef1.20261008120000.mvb
+just pre 0.3.0 --dry-run
+```
+
+It is committed and tagged, and it is not pushed. `dist/latest` points at it;
+`dist/stable` and `dist/rc` stay where they are. pip and uv treat it as a
+pre-release, so it is installed only for that exact version or with `--pre`.
 
 The integration tests build `docker/sshd/Dockerfile` (Debian `sshd` with a
 `tues` user that may sudo, and a `nopw` NOPASSWD target) and start it on an
