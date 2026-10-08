@@ -539,12 +539,15 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     let multi = hosts.len() > 1;
     let prefix = run.prefix.unwrap_or(multi);
     let run = Arc::new(run);
-    let sem = Arc::new(Semaphore::new(jobs));
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
     let stderr = Arc::new(Mutex::new(tokio::io::stderr()));
     let cli = Arc::new(cli);
 
-    if cli.fail_fast() {
+    // One job at a time must follow the provider list. Spawning every host
+    // and letting them race for a semaphore does not: the multi-thread
+    // runtime polls tasks in an arbitrary order, so output follows that
+    // race instead of the input.
+    if jobs == 1 {
         let mut exit_code = 0i32;
         for server in &hosts {
             if cli.show_progress() {
@@ -563,13 +566,16 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
             if cli.show_progress() {
                 eprintln!("Finished {server}");
             }
-            if note_failure(server, &outcome, multi, cli.show_progress(), &mut exit_code) {
+            if note_failure(server, &outcome, multi, cli.show_progress(), &mut exit_code)
+                && cli.fail_fast()
+            {
                 break;
             }
         }
         return Ok(exit_code);
     }
 
+    let sem = Arc::new(Semaphore::new(jobs));
     let mut tasks = Vec::with_capacity(hosts.len());
     for server in hosts {
         let sem = sem.clone();

@@ -103,6 +103,36 @@ fn multiple_hosts_with_sudo_and_prefixes() {
 }
 
 #[test]
+fn single_job_runs_hosts_in_input_order() {
+    let f = sshd();
+    let user_at = format!("{}@{}", USER, f.host);
+    let host_port = format!("{}:{}", f.host, f.port);
+    let user_at_port = format!("{}@{}:{}", USER, f.host, f.port);
+    let hosts = [
+        user_at.as_str(),
+        host_port.as_str(),
+        user_at_port.as_str(),
+        f.host.as_str(),
+    ];
+    let mut cmd = tues();
+    cmd.arg("--no-pty").arg("echo hi").arg("cl");
+    for host in hosts {
+        cmd.arg(host);
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let expected: String = hosts
+        .iter()
+        .map(|host| format!("[{host}/stdout]: hi\n"))
+        .collect();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
+}
+
+#[test]
 fn failing_host_yields_nonzero_exit() {
     let f = sshd();
     let out = tues()
