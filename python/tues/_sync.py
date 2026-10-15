@@ -270,16 +270,16 @@ class Popen:
             if self.stdin:
                 self.stdin.close()
         finally:
-            if exc_type is KeyboardInterrupt:
-                return
-            try:
-                self.wait()
-            except TuesError:
-                # A failure to start (e.g. sudo rejected the password) has
-                # already been raised from wait()/communicate(); do not
-                # replace the exception being propagated.
-                if exc_type is None:
-                    raise
+            # Skip the blocking wait on Ctrl-C so the interrupt can propagate.
+            if exc_type is not KeyboardInterrupt:
+                try:
+                    self.wait()
+                except TuesError:
+                    # A failure to start (e.g. sudo rejected the password) has
+                    # already been raised from wait()/communicate(); do not
+                    # replace the exception being propagated.
+                    if exc_type is None:
+                        raise
 
     def _done(self) -> bool:
         """True once the process has exited or failed to start."""
