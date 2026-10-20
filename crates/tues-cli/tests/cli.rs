@@ -442,14 +442,8 @@ fn verbose_reports_the_status_of_each_failed_host() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains(&format!("Starting {}", f.host)),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!("Finished {}", f.host)),
-        "{stderr}"
-    );
+    assert!(stderr.contains(&format!("Starting {}", f.host)), "{stderr}");
+    assert!(stderr.contains(&format!("Finished {}", f.host)), "{stderr}");
     assert_eq!(
         stderr
             .lines()
@@ -725,10 +719,7 @@ fn unknown_options_are_not_taken_as_command_or_provider() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("unexpected argument '-Q'"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("unexpected argument '-Q'"), "{stderr}");
     assert!(
         !stderr.contains("tues-provider-"),
         "must not invent a provider from the unknown option: {stderr}"
@@ -737,10 +728,7 @@ fn unknown_options_are_not_taken_as_command_or_provider() {
     let out = tues_bin().args(["true", "-Z", "host"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("unexpected argument '-Z'"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("unexpected argument '-Z'"), "{stderr}");
 
     let dir = std::env::temp_dir().join(format!("tues-cli-unknown-opt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -748,13 +736,7 @@ fn unknown_options_are_not_taken_as_command_or_provider() {
     let script = dir.join("tool");
     std::fs::write(&script, "#!/bin/sh\n").unwrap();
     let out = tues_bin()
-        .args([
-            "-s",
-            script.to_str().unwrap(),
-            "--not-a-flag",
-            "cl",
-            "h",
-        ])
+        .args(["-s", script.to_str().unwrap(), "--not-a-flag", "cl", "h"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -1095,7 +1077,10 @@ fn missing_or_invalid_script_is_an_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
+    assert!(
+        stderr.contains("nope: not found on script path"),
+        "{stderr}"
+    );
 
     let dir = script_dir("missing");
     let out = tues_bin()
@@ -1108,7 +1093,10 @@ fn missing_or_invalid_script_is_an_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
+    assert!(
+        stderr.contains("nope: not found on script path"),
+        "{stderr}"
+    );
 
     let out = tues_bin()
         .env_remove("TUES_PATH")
@@ -1122,7 +1110,10 @@ fn missing_or_invalid_script_is_an_error() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("nope: not found on script path"), "{stderr}");
+    assert!(
+        stderr.contains("nope: not found on script path"),
+        "{stderr}"
+    );
 
     std::fs::write(dir.join("bad"), "# tues-args = {nope}\n").unwrap();
     let out = tues_bin()

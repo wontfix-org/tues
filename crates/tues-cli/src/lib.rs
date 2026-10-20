@@ -260,17 +260,18 @@ struct Cli {
     #[arg(long = "path", value_name = "DIR")]
     script_path: Vec<PathBuf>,
 
-    /// Print a start/finish line for each host on stderr.
+    /// Print a start/finish line for each host on stderr (repeat for more logging).
     #[arg(
         short = 'v',
         long,
-        action = clap::ArgAction::SetTrue,
+        action = clap::ArgAction::Count,
         overrides_with = "quiet",
-        env = "TUES_VERBOSE"
+        env = "TUES_VERBOSE",
+        value_parser = parse_verbose_count
     )]
-    verbose: bool,
+    verbose: u8,
 
-    /// Suppress start/finish and per-host failure status lines.
+    /// Suppress start/finish, per-host failure status, and extra logging.
     #[arg(
         short = 'q',
         long,
@@ -498,7 +499,13 @@ where
 
 async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     let debug = cli.debug;
-    let level = if debug { "debug" } else { "warn" };
+    let level = match cli.verbose_level() {
+        0 if debug => "debug",
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
     // A host program may already have installed a subscriber; keep it.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -677,9 +684,14 @@ impl Cli {
         }
     }
 
-    /// Effective verbosity for status lines; `-q` forces quiet.
+    /// Effective `-v` count; `-q` forces quiet.
+    fn verbose_level(&self) -> u8 {
+        if self.quiet { 0 } else { self.verbose }
+    }
+
+    /// Start/finish and per-host failure status lines; `-q` forces quiet.
     fn show_progress(&self) -> bool {
-        self.verbose && !self.quiet
+        self.verbose_level() > 0
     }
 }
 
@@ -871,6 +883,18 @@ fn positional_provider(cli: &Cli) -> anyhow::Result<Option<(&str, &[String])>> {
         anyhow::bail!("unexpected argument '{name}'");
     }
     Ok(Some((name, cli.args.get(provider_at + 1..).unwrap_or(&[]))))
+}
+
+/// `-v` count from `TUES_VERBOSE`: a number, or a boolean (`true` → 1).
+fn parse_verbose_count(s: &str) -> Result<u8, String> {
+    if let Ok(n) = s.parse::<u8>() {
+        return Ok(n);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "true" | "t" | "yes" | "y" | "on" => Ok(1),
+        "false" | "f" | "no" | "n" | "off" => Ok(0),
+        _ => Err(format!("invalid verbosity '{s}'")),
+    }
 }
 
 /// `-` / `--` are positionals; anything else that starts with `-` looks like a flag.
@@ -1765,10 +1789,31 @@ mod tests {
     #[test]
     fn quiet_overrides_verbose_progress() {
         let cli = super::Cli::try_parse_from(["tues", "-v", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 1);
         assert!(cli.show_progress());
         let cli = super::Cli::try_parse_from(["tues", "-v", "-q", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 0);
         assert!(!cli.show_progress());
         assert!(cli.quiet);
+
+        let cli = super::Cli::try_parse_from(["tues", "-vv", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 2);
+        let cli = super::Cli::try_parse_from(["tues", "-vvv", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 3);
+        let cli = super::Cli::try_parse_from(["tues", "-vv", "-q", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 0);
+        assert!(!cli.show_progress());
+        let cli = super::Cli::try_parse_from(["tues", "-q", "-vv", "true", "cl", "h"]).unwrap();
+        assert_eq!(cli.verbose_level(), 2);
+        assert!(cli.show_progress());
+    }
+
+    #[test]
+    fn verbose_env_accepts_a_count_or_a_boolean() {
+        assert_eq!(super::parse_verbose_count("2").unwrap(), 2);
+        assert_eq!(super::parse_verbose_count("true").unwrap(), 1);
+        assert_eq!(super::parse_verbose_count("off").unwrap(), 0);
+        assert!(super::parse_verbose_count("lots").is_err());
     }
 
     #[test]
@@ -1943,16 +1988,10 @@ mod tests {
         assert_eq!(resolved.file.src, script);
         assert_eq!(resolved.file.name, "tool");
         assert!(resolved.file.is_temporary());
-        assert_eq!(
-            resolved.command,
-            "chmod u+x \"$TUES_FILE1\" && ./tool arg"
-        );
+        assert_eq!(resolved.command, "chmod u+x \"$TUES_FILE1\" && ./tool arg");
         assert_eq!(resolved.defaults, super::ScriptDefaults::default());
         let resolved = super::resolve_script(&format!("{spec} arg"), empty, 2).unwrap();
-        assert_eq!(
-            resolved.command,
-            "chmod u+x \"$TUES_FILE3\" && ./tool arg"
-        );
+        assert_eq!(resolved.command, "chmod u+x \"$TUES_FILE3\" && ./tool arg");
 
         let missing = dir.join("missing");
         let err = super::lookup_script(missing.to_str().unwrap(), empty).unwrap_err();
@@ -2202,14 +2241,16 @@ echo hi
     #[test]
     fn option_looking_command_or_provider_is_an_unexpected_argument() {
         // Unknown flags must not become the command / provider via trailing_var_arg.
-        let cli = super::Cli::try_parse_from(["tues", "-Q", "-p", "-s", "tool", "cl", "h"]).unwrap();
+        let cli =
+            super::Cli::try_parse_from(["tues", "-Q", "-p", "-s", "tool", "cl", "h"]).unwrap();
         let err = super::prepare_run(&cli).unwrap_err();
         assert!(
             err.to_string().contains("unexpected argument '-Q'"),
             "{err}"
         );
 
-        let cli = super::Cli::try_parse_from(["tues", "--no-such-flag", "true", "cl", "h"]).unwrap();
+        let cli =
+            super::Cli::try_parse_from(["tues", "--no-such-flag", "true", "cl", "h"]).unwrap();
         let err = super::prepare_run(&cli).unwrap_err();
         assert!(
             err.to_string()
