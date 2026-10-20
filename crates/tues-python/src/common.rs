@@ -148,7 +148,7 @@ fn to_epoch(t: Option<SystemTime>) -> Option<f64> {
 }
 
 /// Remote file metadata.
-#[pyclass(name = "Metadata", module = "tues", frozen, skip_from_py_object)]
+#[pyclass(name = "Metadata", module = "tues", frozen)]
 #[derive(Clone)]
 pub struct Metadata(pub tues_core::Metadata);
 
@@ -206,7 +206,7 @@ impl Metadata {
 }
 
 /// A directory entry.
-#[pyclass(name = "DirEntry", module = "tues", frozen, skip_from_py_object)]
+#[pyclass(name = "DirEntry", module = "tues", frozen)]
 #[derive(Clone)]
 pub struct DirEntry {
     #[pyo3(get)]
@@ -244,7 +244,7 @@ pub fn dir_entries(py: Python<'_>, entries: Vec<tues_core::DirEntry>) -> PyResul
 // ---------------------------------------------------------------------------
 
 /// Context of a password request handed to a Python password manager.
-#[pyclass(name = "PasswordRequest", module = "tues", frozen, skip_from_py_object)]
+#[pyclass(name = "PasswordRequest", module = "tues", frozen)]
 #[derive(Clone)]
 pub struct PasswordRequest(pub tues_core::PasswordRequest);
 

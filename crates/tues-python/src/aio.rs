@@ -22,7 +22,7 @@ fn bytes(v: &[u8]) -> Py<PyBytes> {
 }
 
 /// An asyncio SSH session.
-#[pyclass(name = "AsyncSession", module = "tues._tues", skip_from_py_object)]
+#[pyclass(name = "AsyncSession", module = "tues._tues")]
 #[derive(Clone)]
 pub struct AsyncSession {
     inner: tues_async::Session,
