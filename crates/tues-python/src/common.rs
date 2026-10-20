@@ -280,13 +280,13 @@ impl PasswordRequest {
     fn key_path(&self) -> Option<String> {
         self.0.key_path.as_ref().map(|p| p.display().to_string())
     }
-    /// A human readable prompt.
+    /// A human readable prompt label (no trailing colon).
     #[getter]
     fn prompt(&self) -> String {
         self.0.prompt_text()
     }
     fn __repr__(&self) -> String {
-        format!("PasswordRequest({:?})", self.0.prompt_text().trim_end())
+        format!("PasswordRequest({:?})", self.0.prompt_text())
     }
 }
 

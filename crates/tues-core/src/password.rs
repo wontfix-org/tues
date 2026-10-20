@@ -107,18 +107,22 @@ impl PasswordRequest {
         }
     }
 
-    /// A human readable prompt.
+    /// A human readable prompt label.
+    ///
+    /// This is a label, not a TTY prompt line: it has no trailing colon.
+    /// [`TtyPrompter`] (and other TTY rendering) appends `: ` when writing
+    /// to a terminal.
     pub fn prompt_text(&self) -> String {
         match self.kind {
-            PasswordKind::Login => format!("{}@{}'s password: ", self.login_user, self.host),
+            PasswordKind::Login => format!("{}@{}'s password", self.login_user, self.host),
             PasswordKind::Sudo => format!(
-                "[sudo] password for {}@{} (user {}): ",
+                "[sudo] password for {}@{} (user {})",
                 self.login_user,
                 self.host,
                 self.user.as_deref().unwrap_or("root")
             ),
             PasswordKind::KeyPassphrase => format!(
-                "Enter passphrase for key '{}': ",
+                "Enter passphrase for key '{}'",
                 self.key_path
                     .as_ref()
                     .map(|p| p.display().to_string())
@@ -218,7 +222,8 @@ impl Default for TtyPrompter {
 
 impl PasswordPrompter for TtyPrompter {
     fn prompt(&mut self, req: &PasswordRequest) -> Result<SecretString> {
-        crate::tty_prompt::read_hidden(&req.prompt_text(), self.finish).map(SecretString::from)
+        crate::tty_prompt::read_hidden(&format!("{}: ", req.prompt_text()), self.finish)
+            .map(SecretString::from)
     }
 }
 
@@ -302,7 +307,7 @@ impl PasswordManager for NoPasswordManager {
     fn get(&mut self, req: &PasswordRequest) -> Result<SecretString> {
         Err(Error::Password(format!(
             "no password manager configured ({})",
-            req.prompt_text().trim_end()
+            req.prompt_text()
         )))
     }
 
@@ -317,6 +322,7 @@ impl PasswordManager for NoPasswordManager {
 mod tests {
     use super::*;
     use secrecy::ExposeSecret;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -350,5 +356,32 @@ mod tests {
             pm.get(&PasswordRequest::login("h", 22, "u")),
             Err(Error::Password(_))
         ));
+    }
+
+    #[test]
+    fn prompt_text_is_a_label_without_a_trailing_colon() {
+        let login = PasswordRequest::login("web01", 22, "alice");
+        assert_eq!(login.prompt_text(), "alice@web01's password");
+        assert!(!login.prompt_text().ends_with(':'));
+        assert!(!login.prompt_text().ends_with(": "));
+
+        let sudo = PasswordRequest::sudo("web01", 22, "alice", "root");
+        assert_eq!(
+            sudo.prompt_text(),
+            "[sudo] password for alice@web01 (user root)"
+        );
+        assert!(!sudo.prompt_text().ends_with(':'));
+
+        let key = PasswordRequest::key_passphrase(
+            "web01",
+            22,
+            "alice",
+            PathBuf::from("/home/alice/.ssh/id_rsa"),
+        );
+        assert_eq!(
+            key.prompt_text(),
+            "Enter passphrase for key '/home/alice/.ssh/id_rsa'"
+        );
+        assert!(!key.prompt_text().ends_with(':'));
     }
 }

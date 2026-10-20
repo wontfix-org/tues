@@ -331,14 +331,16 @@ class PasswordManager:
     host in a run.
 
     ``prompt`` replaces the default question. It receives the prompt string
-    and returns the password, or ``None`` to abort. The default reads from
+    (a label, with no trailing colon) and returns the password, or ``None``
+    to abort. The default writes that label followed by ``: `` to
     ``/dev/tty`` with echo turned off and restores the previous terminal mode
     if the prompt is interrupted. ``prompt_finish`` says what that default
     does with the cursor afterwards: :attr:`PasswordPromptFinish.Newline`
     (the legacy behaviour, so the next write starts on the following line),
     :attr:`PasswordPromptFinish.CurrentLine` (leave the cursor where it is),
     or :attr:`PasswordPromptFinish.Erase` (remove the prompt so later output
-    is not prefixed by it). A custom ``prompt`` ignores ``prompt_finish``.
+    is not prefixed by it). A custom ``prompt`` owns rendering and ignores
+    ``prompt_finish``.
     """
 
     def __init__(
@@ -357,7 +359,7 @@ class PasswordManager:
 
     def _prompt(self, message: str) -> Optional[str]:
         with _prompt_gate:
-            return _ask_tty(message, self._prompt_finish)
+            return _ask_tty(f"{message}: ", self._prompt_finish)
 
     def get(self, message: Any = None) -> Optional[str]:
         """Return the cached password, prompting when ``message`` is given.

@@ -565,7 +565,7 @@ Consequences of the process running on another machine:
 import getpass, tues
 
 # Prompt once per host/user; Rust memoizes and re-prompts after a wrong password.
-s = tues.Session("alice@web01", password_manager=lambda req: getpass.getpass(req.prompt))
+s = tues.Session("alice@web01", password_manager=lambda req: getpass.getpass(f"{req.prompt}: "))
 
 # Fixed password for login and sudo.
 s = tues.Session("alice@web01", password="s3cret")

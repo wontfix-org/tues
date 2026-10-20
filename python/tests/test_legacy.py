@@ -119,12 +119,12 @@ if mode == "read":
         manager = tues.PasswordManager(prompt_finish=finish)
     else:
         manager = tues.PasswordManager()
-    password = manager.get("Password: ")
+    password = manager.get("Password")
     sys.stdout.write("PW=%s\n" % password)
     sys.stdout.flush()
 elif mode == "interrupt":
     def ask():
-        tues.PasswordManager().get("Password: ")
+        tues.PasswordManager().get("Password")
 
     thread = threading.Thread(target=ask)
     thread.start()
