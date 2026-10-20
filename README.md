@@ -634,15 +634,16 @@ cargo coverage                               # HTML report: target/llvm-cov/html
 ## Release
 
 `scripts/release` sets the workspace version (the Python package reads it from
-there), commits it, and tags `v<version>`. It then builds an sdist and one
-wheel per CPython into `dist/<version>/` for an internal index. Each wheel
-carries the extension module and the `tues` console script. Older version
-directories are left in place. `dist/latest` points at the version just
-built, and `dist/stable` points at the newest tagged final release. A release
-or release candidate is created only from `main` or `master`. A final release
-pushes that branch and the `v<version>` tag to the branch's upstream. A release
-candidate is not pushed. Unless `--dry-run` is set, the artifacts are published with
-`uv publish` (uv's configured index and credentials).
+there), commits that bump on the release branch, and tags `v<version>`. It
+then builds an sdist and one wheel per CPython into `dist/<version>/` for an
+internal index. Each wheel carries the extension module and the `tues`
+console script. Older version directories are left in place. `dist/latest`
+points at the version just built, and `dist/stable` points at the newest
+tagged final release. A release or release candidate is created only from
+`main` or `master`. After the build succeeds, a final release pushes that
+branch and the tag to the branch's upstream. A release candidate is not
+pushed. Unless `--dry-run` is set, the artifacts are published with
+`uv publish` (uv's configured index and credentials) after that push.
 
 ```sh
 just release 0.2.0
@@ -681,7 +682,8 @@ Cargo stores `X.Y.Z-rc.N`. That is SemVer, and PEP 440 normalizes it to
 `X.Y.ZrcN`. A version with an `rcN` suffix is a pre-release, so pip and uv
 keep installing the current final release until someone asks for the
 candidate (`tues==0.3.0rc1`) or passes `--pre`. The candidate is committed
-and tagged (`v0.3.0-rc.1`). `dist/latest` and `dist/rc` point at it;
+on the release branch and tagged (`v0.3.0-rc.1`) before the build.
+`dist/latest` and `dist/rc` point at it;
 `dist/stable` stays on the last final release.
 
 ```sh
@@ -698,7 +700,8 @@ just pre
 just pre 0.3.0 --dry-run
 ```
 
-It is committed and tagged, and it is not pushed. `dist/latest` points at it;
+It is committed on the current branch and tagged before the build, and it
+is not pushed. `dist/latest` points at it;
 `dist/stable` and `dist/rc` stay where they are. pip and uv treat it as a
 pre-release, so it is installed only for that exact version or with `--pre`.
 
