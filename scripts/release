@@ -6,7 +6,8 @@ Usage: scripts/release [-d|--dry-run] [--rc | --pre]
 
 VERSION is a dotted release such as 0.2.0 (a leading "v" is accepted and
 stripped). When omitted and stdin is a TTY, the script prints commit
-summaries since the last release and prompts for a version. The script
+summaries since the last release and prompts for a version. Hitting
+return accepts the guessed next release. The script
 commits the version bump, creates an annotated tag vVERSION, and writes a
 release sdist plus one wheel per configured CPython to dist/<version>/.
 dist/latest points at the version just built. dist/stable points at the
@@ -134,7 +135,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         metavar="VERSION",
         nargs="?",
         help=(
-            "release version, e.g. 0.2.0 (prompted when omitted on a TTY; "
+            "release version, e.g. 0.2.0 (prompted when omitted on a TTY, "
+            "with the guessed next release as the default; "
             "--pre defaults to the current release)"
         ),
     )
@@ -227,6 +229,18 @@ def release_base(version: str) -> str:
     if PLAIN_VERSION_RE.match(head):
         return head
     raise ReleaseError(f"not a release version: {version}", code=2)
+
+
+def guess_next_release(current: str) -> str:
+    """The next final ``X.Y.Z`` after the workspace version.
+
+    A final ``4.0.6`` becomes ``4.0.7``. An rc or developmental version of
+    ``4.0.7`` stays ``4.0.7``.
+    """
+    if PLAIN_VERSION_RE.match(current):
+        major, minor, patch = current.split(".")
+        return f"{major}.{minor}.{int(patch) + 1}"
+    return release_base(current)
 
 
 def version_user() -> str:
@@ -401,17 +415,16 @@ def prompt_version(*, candidate: bool) -> str:
         for subject in subjects:
             print(f"  {subject}")
     print()
+    guessed = guess_next_release(current)
     if candidate:
-        prompt = "Upcoming release or candidate (e.g. 0.3.0 or 0.3.0rc2): "
+        prompt = f"Upcoming release or candidate [{guessed}]: "
     else:
-        prompt = "Release version (e.g. 0.2.0): "
+        prompt = f"Release version [{guessed}]: "
     try:
         given = input(prompt).strip()
     except EOFError as exc:
         raise ReleaseError("no version entered", code=2) from exc
-    if not given:
-        raise ReleaseError("no version entered", code=2)
-    return given
+    return given or guessed
 
 
 def version_directory(name: str) -> Path:

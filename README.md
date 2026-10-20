@@ -650,7 +650,8 @@ just release 0.2.0
 
 `just release` calls `scripts/release`. When the version is omitted on a TTY,
 the script prints commit summaries since the last release and prompts for
-one. Further arguments are passed through:
+one. Hitting return accepts the guessed next release. Further arguments are
+passed through:
 
 ```sh
 just release
