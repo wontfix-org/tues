@@ -308,6 +308,25 @@ def restore_manifests() -> None:
     git("checkout", "--", "Cargo.toml", "Cargo.lock")
 
 
+def fetch_locked() -> subprocess.CompletedProcess:
+    """Download crates pinned in Cargo.lock without resolving newer versions."""
+    return run(["cargo", "fetch", "--locked"], capture=True, check=False)
+
+
+def refresh_lockfile() -> subprocess.CompletedProcess:
+    """Rewrite Cargo.lock for the current manifests without contacting crates.io.
+
+    Callers must ``cargo fetch --locked`` first so pinned crate sources are
+    already in the local cache. ``--offline`` then updates workspace versions
+    in the lockfile and cannot re-resolve dependencies.
+    """
+    return run(
+        ["cargo", "metadata", "--offline", "--format-version", "1"],
+        capture=True,
+        check=False,
+    )
+
+
 def current_branch() -> str:
     """The branch HEAD is on, or ``HEAD`` when detached."""
     return git("rev-parse", "--abbrev-ref", "HEAD", capture=True).stdout.strip()
@@ -663,15 +682,20 @@ def main(argv: Sequence[str]) -> int:
         return 0
 
     if need_commit:
+        fetched = fetch_locked()
+        if fetched.returncode != 0:
+            raise ReleaseError(
+                "cargo fetch --locked failed; "
+                "Cargo.lock must match the current manifests"
+            )
         rewrite_cargo_toml(current, version)
-        refreshed = run(
-            ["cargo", "metadata", "--offline", "--format-version", "1"],
-            capture=True,
-            check=False,
-        )
+        refreshed = refresh_lockfile()
         if refreshed.returncode != 0:
             restore_manifests()
-            raise ReleaseError("cargo metadata rejected the new version; Cargo.toml restored")
+            raise ReleaseError(
+                "cargo metadata --offline failed while refreshing Cargo.lock; "
+                "Cargo.toml restored"
+            )
         git("add", "Cargo.toml", "Cargo.lock")
         git("commit", "-m", f"Release {version}.")
     if need_tag:
