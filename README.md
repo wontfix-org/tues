@@ -589,7 +589,7 @@ Errors are raised as `tues.TuesError` subclasses: `ConnectError`, `AuthError`,
 For a command running as a user other than the login user the driver executes
 
 ```text
-sudo -S -k -p '[tues-sudo-<nonce>]' -u <user> -- /bin/sh -c 'printf %s "[tues-ok-<nonce>]"; <command>'
+sudo -S -k -H -p '[tues-sudo-<nonce>]' -u <user> -- /bin/sh -c 'printf %s "[tues-ok-<nonce>]"; <command>'
 ```
 
 and runs the channel through `SudoFilter`:

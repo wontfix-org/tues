@@ -458,7 +458,7 @@ impl Command {
                     self.plain_command_line(shell)
                 );
                 format!(
-                    "sudo -S -k -p {} -u {} -- /bin/sh -c {}",
+                    "sudo -S -k -H -p {} -u {} -- /bin/sh -c {}",
                     shell::quote(&s.prompt_str()),
                     shell::quote(&s.user),
                     shell::quote(&script)
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(
             plan.command_line,
             format!(
-                "sudo -S -k -p '{prompt}' -u root -- /bin/sh -c 'printf %s '\\''{marker}'\\''; env A=1 id'"
+                "sudo -S -k -H -p '{prompt}' -u root -- /bin/sh -c 'printf %s '\\''{marker}'\\''; env A=1 id'"
             )
         );
     }
