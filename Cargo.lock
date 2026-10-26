@@ -3572,7 +3572,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tues"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "tues-async",
  "tues-core",
@@ -3581,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "tues-async"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "bytes",
  "futures",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "tues-cli"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3614,7 +3614,7 @@ dependencies = [
 
 [[package]]
 name = "tues-core"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "bytes",
  "dirs",
@@ -3628,7 +3628,7 @@ dependencies = [
 
 [[package]]
 name = "tues-python"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
@@ -3641,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "tues-sync"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "tokio",
  "tues-async",
@@ -3651,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "tues-testsupport"
-version = "4.0.7"
+version = "4.0.8"
 dependencies = [
  "libc",
  "testcontainers",
