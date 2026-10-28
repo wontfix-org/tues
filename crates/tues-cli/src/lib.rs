@@ -127,6 +127,11 @@ struct Cli {
     )]
     no_check: bool,
 
+    /// Wait after execution on every host before moving on.
+    /// Only valid with one job at a time.
+    #[arg(short = 'w', long, action = clap::ArgAction::SetTrue, env = "TUES_WAIT")]
+    wait: bool,
+
     /// SSH port.
     #[arg(long, env = "TUES_PORT")]
     port: Option<u16>,
@@ -531,6 +536,9 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     if cli.fail_fast() && jobs != 1 {
         anyhow::bail!("--check only works with one job at a time");
     }
+    if cli.wait && jobs != 1 {
+        anyhow::bail!("--wait only works with one job at a time");
+    }
     let (run, defaults) = prepare_run(&cli)?;
     let mut hosts = resolve_hosts(&cli, defaults.as_ref())?;
     if cli.sort_hosts {
@@ -556,7 +564,8 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
     // race instead of the input.
     if jobs == 1 {
         let mut exit_code = 0i32;
-        for server in &hosts {
+        let last = hosts.len().saturating_sub(1);
+        for (i, server) in hosts.iter().enumerate() {
             if cli.show_progress() {
                 eprintln!("Starting {server}");
             }
@@ -573,9 +582,12 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
             if cli.show_progress() {
                 eprintln!("Finished {server}");
             }
-            if note_failure(server, &outcome, multi, cli.show_progress(), &mut exit_code)
-                && cli.fail_fast()
-            {
+            let failed = note_failure(server, &outcome, multi, cli.show_progress(), &mut exit_code);
+            let moving_on = i != last && !(failed && cli.fail_fast());
+            if cli.wait && moving_on {
+                wait_for_enter()?;
+            }
+            if failed && cli.fail_fast() {
                 break;
             }
         }
@@ -620,6 +632,22 @@ async fn run_cli(cli: Cli) -> anyhow::Result<i32> {
         );
     }
     Ok(exit_code)
+}
+
+/// Pause until the next line on stdin. EOF aborts the run before the next host.
+fn wait_for_enter() -> anyhow::Result<()> {
+    use std::io::Write;
+
+    eprint!("Press <ENTER> to continue: ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    let n = std::io::stdin()
+        .read_line(&mut line)
+        .context("waiting for input")?;
+    if n == 0 {
+        anyhow::bail!("aborted waiting for input");
+    }
+    Ok(())
 }
 
 /// Record a host that failed or exited non-zero. Returns whether this host was unsuccessful.
@@ -1774,6 +1802,16 @@ mod tests {
 
         let cli = super::Cli::try_parse_from(["tues", "-n", "0", "true", "cl", "h"]).unwrap();
         assert_eq!(cli.job_count(), 1);
+    }
+
+    #[test]
+    fn wait_flag_parses() {
+        let cli = super::Cli::try_parse_from(["tues", "true", "cl", "h"]).unwrap();
+        assert!(!cli.wait);
+        let cli = super::Cli::try_parse_from(["tues", "-w", "true", "cl", "h"]).unwrap();
+        assert!(cli.wait);
+        let cli = super::Cli::try_parse_from(["tues", "--wait", "true", "cl", "h"]).unwrap();
+        assert!(cli.wait);
     }
 
     #[test]

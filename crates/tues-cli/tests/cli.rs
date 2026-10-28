@@ -196,6 +196,126 @@ fn check_stops_after_the_first_failure() {
 }
 
 #[test]
+fn wait_rejects_more_than_one_job() {
+    let out = tues_bin()
+        .args(["-w", "-n", "2", "true", "cl", "h"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--wait only works with one job at a time"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn wait_pauses_between_hosts() {
+    let f = sshd();
+    let mut child = tues()
+        .arg("--no-pty")
+        .arg("--wait")
+        .arg("echo hi")
+        .arg("cl")
+        .arg(&f.host)
+        .arg(&f.host)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("[{0}/stdout]: hi\n[{0}/stdout]: hi\n", f.host)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("Press <ENTER> to continue: ").count(),
+        1,
+        "{stderr}"
+    );
+}
+
+#[test]
+fn wait_on_one_host_does_not_prompt() {
+    let f = sshd();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--wait")
+        .arg("echo hi")
+        .arg("cl")
+        .arg(&f.host)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("Press <ENTER>"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn wait_aborts_on_eof_before_the_next_host() {
+    let f = sshd();
+    let out = tues()
+        .arg("--no-pty")
+        .arg("--wait")
+        .arg("echo hi")
+        .arg("cl")
+        .arg(&f.host)
+        .arg("127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("aborted waiting for input"), "{stderr}");
+    assert!(
+        !stderr.contains("127.0.0.1"),
+        "later host must not be started: {stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("[{}/stdout]: hi\n", f.host)
+    );
+}
+
+#[test]
+fn wait_does_not_prompt_when_check_stops() {
+    let f = sshd();
+    let out = tues()
+        .arg("--check")
+        .arg("--wait")
+        .arg("--connect-timeout")
+        .arg("2")
+        .arg("exit 4")
+        .arg("cl")
+        .arg(&f.host)
+        .arg("127.0.0.1:1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("Press <ENTER>"), "{stderr}");
+    assert!(
+        !stderr.contains("127.0.0.1"),
+        "later host must not be started: {stderr}"
+    );
+}
+
+#[test]
 fn check_rejects_more_than_one_job() {
     let f = sshd();
     let out = tues()

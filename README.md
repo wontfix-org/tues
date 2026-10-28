@@ -52,6 +52,7 @@ tues [OPTIONS] [--script <SPEC> | <COMMAND>] [PROVIDER [ARGS]...]
   -p, --parallel             Up to 20 hosts at once, unless `-n` is set
   -c, --check                Stop after the first failure (one job only)
       --no-check             Keep going after a failure (default)
+  -w, --wait                 Pause for Enter after each host (one job only)
       --port <PORT>          SSH port
   -i, --identity <FILE>      Identity file; may be repeated
   -F, --config <FILE>        Read this ssh_config instead of ~/.ssh/config
@@ -87,6 +88,8 @@ the remaining arguments and options passed through, and reads the same
 newline-separated list from its stdout. tues options come before the command.
 `--show-hosts` prints the resolved list before connecting; without it the
 command runs directly. `--sort-hosts` sorts that list alphabetically first.
+`-w`/`--wait` pauses for Enter after each host before the next one, and only
+works with one job at a time.
 
 A host is `host`, `login-user@host`, `host:port`, `[2001:db8::1]:2222`, or an
 alias from `~/.ssh/config`.
